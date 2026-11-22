@@ -8,7 +8,7 @@ use std::process::Command;
 use tuxixi::cli;
 use tuxixi::css::build_css;
 use tuxixi::settings::{BlurMode, Settings, SettingsManager};
-use tuxixi::theme::{get_colors, THEME_NAMES};
+use tuxixi::theme::{get_colors, Registry};
 
 fn tempdir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -50,10 +50,10 @@ fn settings_changes_flow_into_css_and_colors() {
     let path = dir.join("config.json");
     let mut mgr = SettingsManager::load(&path);
 
-    // Default: opaque theme background.
+    // Default: opaque theme background (default theme: Tokyo Night).
     let s = mgr.get().clone();
     let css = build_css(&s.theme, s.transparent, s.blur_mode);
-    assert!(css.contains("#1D1F21"));
+    assert!(css.contains("#1A1B26"));
 
     // Toggle transparency: CSS and terminal colors must switch to glass.
     mgr.toggle_transparency();
@@ -93,17 +93,18 @@ fn settings_survive_reload_with_full_content() {
 }
 
 #[test]
-fn theme_cycle_covers_all_19_themes() {
+fn theme_cycle_covers_all_30_builtin_themes() {
     let dir = tempdir("cycleall");
     let path = dir.join("config.json");
     let mut mgr = SettingsManager::load(&path);
+    let count = Registry::builtin().len();
     let mut seen = Vec::new();
-    for _ in 0..THEME_NAMES.len() {
+    for _ in 0..count {
         mgr.cycle_theme();
         seen.push(mgr.get().theme.clone());
     }
     seen.dedup();
-    assert_eq!(seen.len(), THEME_NAMES.len(), "cycle visited every theme once");
+    assert_eq!(seen.len(), count, "cycle visited every theme once");
     fs::remove_dir_all(dir).ok();
 }
 
@@ -151,4 +152,41 @@ fn installed_binary_help_exits_0() {
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("--ip"));
+    assert!(text.contains("update"));
+}
+
+#[test]
+fn installed_binary_update_help_exits_0_offline() {
+    let exe = env!("CARGO_BIN_EXE_tuxixi");
+    let out = Command::new(exe)
+        .args(["update", "--help"])
+        .output()
+        .expect("binary should run");
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("Usage: tuxixi update"));
+    assert!(text.contains("--self"));
+    assert!(text.contains("--theme"));
+}
+
+#[test]
+fn installed_binary_update_unknown_flag_exits_2() {
+    let exe = env!("CARGO_BIN_EXE_tuxixi");
+    let out = Command::new(exe)
+        .args(["update", "--bogus"])
+        .output()
+        .expect("binary should run");
+    assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("unknown update flag"));
+    assert!(err.contains("Usage: tuxixi update"));
+}
+
+#[test]
+fn installed_binary_help_alias_works() {
+    let exe = env!("CARGO_BIN_EXE_tuxixi");
+    let out = Command::new(exe).arg("help").output().unwrap();
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("COMMANDS"));
 }

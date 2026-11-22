@@ -11,11 +11,10 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::theme::{theme_colors, BLUR_MODES, THEME_NAMES};
+use crate::theme::{theme_colors, BLUR_MODES, Registry, DEFAULT_THEME};
 
 pub const DEFAULT_FONT: &str = "Monospace";
 pub const DEFAULT_FONT_SIZE: u32 = 11;
-pub const DEFAULT_THEME: &str = "Alacritty Dark";
 pub const MIN_FONT_SIZE: u32 = 6;
 pub const MAX_FONT_SIZE: u32 = 48;
 
@@ -114,7 +113,7 @@ impl Settings {
 
         if let Some(v) = obj.get("theme") {
             if let Some(theme) = v.as_str() {
-                if THEME_NAMES.contains(&theme) {
+                if Registry::global().get(theme).is_some() {
                     s.theme = theme.to_string();
                 }
             }
@@ -154,7 +153,7 @@ impl Settings {
         s
     }
 
-    pub fn theme_colors(&self) -> (&'static str, &'static str) {
+    pub fn theme_colors(&self) -> (String, String) {
         theme_colors(&self.theme)
     }
 }
@@ -266,13 +265,14 @@ impl SettingsManager {
     }
 
     pub fn cycle_theme(&mut self) -> bool {
+        let names = Registry::global().names();
         let current = &self.data.theme;
-        let next = match THEME_NAMES.iter().position(|t| t == current) {
-            Some(i) => THEME_NAMES[(i + 1) % THEME_NAMES.len()],
-            None => THEME_NAMES[0],
+        let next = match names.iter().position(|t| t == current) {
+            Some(i) => names[(i + 1) % names.len()].clone(),
+            None => names[0].clone(),
         };
         let mut s = self.data.clone();
-        s.theme = next.to_string();
+        s.theme = next;
         self.set(s)
     }
 
@@ -348,9 +348,9 @@ fn cleanup_temp_files(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// True when `theme` is a valid built-in theme name.
+/// True when `theme` is a valid theme name (built-in or user theme).
 pub fn is_valid_theme(theme: &str) -> bool {
-    THEME_NAMES.contains(&theme)
+    Registry::global().get(theme).is_some()
 }
 
 /// True when `mode` is a valid blur mode string.
@@ -361,7 +361,6 @@ pub fn is_valid_blur_mode(mode: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::THEME_NAMES;
 
     fn temp_config_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -381,7 +380,7 @@ mod tests {
         let s = Settings::default();
         assert_eq!(s.font, "Monospace");
         assert_eq!(s.font_size, 11);
-        assert_eq!(s.theme, "Alacritty Dark");
+        assert_eq!(s.theme, "Tokyo Night");
         assert!(!s.transparent);
         assert_eq!(s.blur_mode, BlurMode::Off);
     }
@@ -437,7 +436,7 @@ mod tests {
         assert!(path.exists());
         let content = fs::read_to_string(&path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-        assert_eq!(parsed["theme"], "Alacritty Dark");
+        assert_eq!(parsed["theme"], "Tokyo Night");
         fs::remove_dir_all(dir).ok();
     }
 
@@ -510,23 +509,26 @@ mod tests {
         let path = dir.join("config.json");
         let mut mgr = SettingsManager::load(&path);
 
-        // Default is "Alacritty Dark" (index 1) -> cycles to index 2.
+        let names = Registry::builtin().names();
+        assert_eq!(names[8], "Tokyo Night"); // DEFAULT_THEME index
+
+        // Default is "Tokyo Night" (index 8) -> cycles to index 9.
         assert!(mgr.cycle_theme());
-        assert_eq!(mgr.get().theme, THEME_NAMES[2]);
+        assert_eq!(mgr.get().theme, names[9]);
 
         // Jump to the last theme and cycle: must wrap to the first.
         let mut s = mgr.get().clone();
-        s.theme = THEME_NAMES[THEME_NAMES.len() - 1].to_string();
+        s.theme = names[names.len() - 1].clone();
         mgr.set(s);
         assert!(mgr.cycle_theme());
-        assert_eq!(mgr.get().theme, THEME_NAMES[0]);
+        assert_eq!(mgr.get().theme, names[0]);
 
-        // Invalid theme resets to the first (Python: next_index = 0).
+        // Invalid theme resets to the first (Matrix).
         let mut s = mgr.get().clone();
         s.theme = "Bogus".into();
         mgr.set(s);
         assert!(mgr.cycle_theme());
-        assert_eq!(mgr.get().theme, THEME_NAMES[0]);
+        assert_eq!(mgr.get().theme, names[0]);
         fs::remove_dir_all(dir).ok();
     }
 
@@ -583,7 +585,9 @@ mod tests {
     #[test]
     fn validity_helpers() {
         assert!(is_valid_theme("Dracula"));
+        assert!(is_valid_theme("Tokyo Night"));
         assert!(!is_valid_theme("dracula"));
+        assert!(!is_valid_theme("Nope"));
         assert!(is_valid_blur_mode("smoky"));
         assert!(!is_valid_blur_mode("SMOKY"));
     }

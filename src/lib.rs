@@ -14,6 +14,7 @@ pub mod shell;
 pub mod sysinfo;
 pub mod theme;
 pub mod title;
+pub mod update;
 pub mod wallpaper;
 
 #[cfg(feature = "gui")]

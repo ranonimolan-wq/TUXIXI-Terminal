@@ -3,11 +3,24 @@
 //! string keeps it fully unit-testable without a display server.
 
 use crate::settings::BlurMode;
-use crate::theme::{theme_colors, SMOKY_ALPHA, TRANSLUCENT_ALPHA};
+use crate::theme::{Registry, Theme, SMOKY_ALPHA, TRANSLUCENT_ALPHA};
 
-/// Build the application-wide CSS for the current visual state.
+/// Build the application-wide CSS for the current visual state. Unknown
+/// theme names fall back to the default theme (Tokyo Night).
 pub fn build_css(theme_name: &str, transparent: bool, blur_mode: BlurMode) -> String {
-    let (bg_hex, fg_hex) = theme_colors(theme_name);
+    let reg = Registry::global();
+    let theme = reg
+        .get(theme_name)
+        .unwrap_or_else(|| reg.fallback())
+        .clone();
+    build_css_with_theme(&theme, transparent, blur_mode)
+}
+
+/// Same, but for an explicit theme (used by tests and callers that hold
+/// a [`Theme`] directly, e.g. user themes).
+pub fn build_css_with_theme(theme: &Theme, transparent: bool, blur_mode: BlurMode) -> String {
+    let bg_hex = theme.background.as_str();
+    let fg_hex = theme.foreground.as_str();
 
     let (win_bg, win_image, tabbar_bg, term_bg, text_hex) = match blur_mode {
         BlurMode::Static => (
@@ -136,6 +149,7 @@ pub fn build_css(theme_name: &str, transparent: bool, blur_mode: BlurMode) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::theme_colors;
 
     #[test]
     fn normal_mode_uses_theme_colors() {
@@ -169,10 +183,23 @@ mod tests {
     }
 
     #[test]
-    fn unknown_theme_falls_back_to_alacritty() {
+    fn unknown_theme_falls_back_to_tokyo_night() {
         let css = build_css("Bogus Theme", false, BlurMode::Off);
-        assert!(css.contains("#1D1F21"));
-        assert!(css.contains("#C5C8C6"));
+        assert!(css.contains("#1A1B26"));
+        assert!(css.contains("#A9B1D6"));
+    }
+
+    #[test]
+    fn custom_user_theme_colors_are_used() {
+        let theme = Theme::from_json(
+            r##"{"name": "Custom", "background": "#010203", "foreground": "#040506"}"##,
+        )
+        .unwrap();
+        let css = build_css_with_theme(&theme, false, BlurMode::Off);
+        assert!(css.contains("background-color: #010203;"));
+        assert!(css.contains("alpha(#040506, 0.65)"));
+        // Unknown name lookup still works through the registry.
+        assert_eq!(theme_colors("Custom").0, "#1A1B26"); // not registered
     }
 
     #[test]

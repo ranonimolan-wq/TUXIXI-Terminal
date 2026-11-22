@@ -15,11 +15,14 @@ fn main() -> ExitCode {
     // CLI commands work in every build configuration.
     let cli_commands = [
         "--help",
+        "help",
         "--version",
+        "version",
         "--system",
         "--sys",
         "--ip",
         "--welcome",
+        "update",
     ];
     let is_cli = args
         .first()

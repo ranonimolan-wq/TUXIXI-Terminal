@@ -15,7 +15,7 @@ Actions.
 
 The GUI is GTK4 + VTE, so you get a real terminal — your own shell (Bash, Zsh,
 Fish), scrollback, copy/paste, TrueColor — wrapped in a small, customizable
-window with tabs, 19 themes and optional transparency (glass/blur).
+window with tabs, 30 themes and optional transparency (glass/blur).
 
 ## Install
 
@@ -50,6 +50,49 @@ tuxixi --version     # version information
 tuxixi --sys         # kernel, uptime, load, RAM, disk
 tuxixi --ip          # interface, internal and external IP
 ```
+
+## Themes
+
+TUXIXI ships with 30 built-in themes — Tokyo Night is the default, plus
+Dracula, Nord, Gruvbox, Catppuccin, Rosé Pine, Kanagawa and more. Cycle
+through them with `Ctrl+Shift+T`.
+
+You can add your own themes: drop a JSON file into
+`~/.config/tuxixi/themes/` and it is picked up on the next start (it
+cycles together with the built-ins, and a file with the same name as a
+built-in overrides it):
+
+```json
+{
+  "name": "My Theme",
+  "background": "#1A1B26",
+  "foreground": "#A9B1D6",
+  "cursor": "#A9B1D6"
+}
+```
+
+Only `cursor` is optional — it defaults to the foreground color.
+
+## Updates
+
+`tuxixi update` keeps your installation fresh — no version numbers, no
+manual downloads. Everything is compared by SHA-256: if the local file's
+hash differs from the upstream one, the new copy is downloaded, otherwise
+nothing happens.
+
+```bash
+tuxixi update            # update the binary and the themes
+tuxixi update --self     # update the tuxixi binary itself
+tuxixi update --theme    # sync the theme collection
+tuxixi update --check    # only show what would change
+```
+
+* `--theme` syncs `themes/` from the repository into
+  `~/.config/tuxixi/themes/`, so new themes are available as soon as
+  they land in the repo. Your local edits are backed up as `.bak`
+  before an overwrite.
+* `--self` compares the running binary against the latest release and
+  replaces it atomically when the hashes differ.
 
 ## License
 

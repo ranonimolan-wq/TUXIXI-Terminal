@@ -6,6 +6,7 @@
 use std::io::Write;
 
 use crate::sysinfo;
+use crate::update;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -34,8 +35,9 @@ pub fn dispatch(args: &[String]) -> CliOutput {
 
     match first {
         "--welcome" => out.stdout.push_str(&sysinfo::format_welcome()),
-        "--help" => out.stdout.push_str(&help_text()),
-        "--version" => out.stdout.push_str(&sysinfo::format_version()),
+        "--help" | "help" => out.stdout.push_str(&help_text()),
+        "--version" | "version" => out.stdout.push_str(&sysinfo::format_version()),
+        "update" => run_update_command(&args[1..], &mut out),
         "--system" | "--sys" => {
             let info = sysinfo::gather_sys();
             out.stdout.push_str(&sysinfo::format_sys(&info));
@@ -79,6 +81,43 @@ pub fn run_and_print(args: &[String]) -> i32 {
     let _ = stdout.flush();
     let _ = stderr.flush();
     out.exit_code
+}
+
+/// Handle `tuxixi update ...`: parse flags, run the plan, report.
+fn run_update_command(rest: &[String], out: &mut CliOutput) {
+    let flag_strs: Vec<&str> = rest.iter().map(|s| s.as_str()).collect();
+    let plan = match update::parse_update_args(&flag_strs) {
+        Ok(plan) => plan,
+        Err(e) => {
+            out.stderr.push_str(&format!(
+                "{RED}{e}{RESET}\n\n",
+                RED = sysinfo::RED,
+                RESET = sysinfo::RESET
+            ));
+            out.stderr.push_str(update::UPDATE_USAGE);
+            out.stderr.push('\n');
+            out.exit_code = 2;
+            return;
+        }
+    };
+    match update::run_plan(&plan) {
+        Ok(report) => {
+            if !plan.help {
+                out.stdout
+                    .push_str(&format!("{PURPLE}\u{25c6} TUXIXI UPDATE{RESET}\n", PURPLE = sysinfo::PURPLE, RESET = sysinfo::RESET));
+            }
+            out.stdout.push_str(&report);
+            out.exit_code = 0;
+        }
+        Err(e) => {
+            out.stderr.push_str(&format!(
+                "{RED}Update failed:{RESET} {e}\n",
+                RED = sysinfo::RED,
+                RESET = sysinfo::RESET
+            ));
+            out.exit_code = 1;
+        }
+    }
 }
 
 fn gather_ip() -> sysinfo::IpInfo {
@@ -155,6 +194,17 @@ pub fn help_text() -> String {
     out.push_str(&format!("  {L}tuxixi --system{R}    {S}System information{R}\n"));
     out.push_str(&format!("  {L}tuxixi --sys{R}       {S}System information{R}\n"));
     out.push_str(&format!("  {L}tuxixi --ip{R}        {S}Network information{R}\n\n"));
+
+    out.push_str(&format!("{B}{C}UPDATES{R}\n"));
+    out.push_str(&format!("  {L}tuxixi update{R}           {S}Update binary + themes (hash based){R}\n"));
+    out.push_str(&format!("  {L}tuxixi update --self{R}    {S}Update the tuxixi binary itself{R}\n"));
+    out.push_str(&format!("  {L}tuxixi update --theme{R}   {S}Sync themes from the repository{R}\n"));
+    out.push_str(&format!("  {L}tuxixi update --check{R}   {S}Only show what would change{R}\n\n"));
+
+    out.push_str(&format!("{B}{C}THEMES{R}\n"));
+    out.push_str(&format!("  {S}30 built-in themes, default: {DEFAULT}{R}\n", DEFAULT = crate::theme::DEFAULT_THEME));
+    out.push_str(&format!("  {S}Add your own JSON files to:{R}\n"));
+    out.push_str(&format!("  {L}~/.config/tuxixi/themes/*.json{R}   {S}(they override built-ins){R}\n\n"));
 
     out.push_str(&format!("{B}{C}UTILITIES{R}\n"));
     out.push_str(&format!("  {L}ll{R}                 {S}List directory contents{R}\n"));
@@ -241,6 +291,48 @@ mod tests {
         assert!(out.stderr.contains("Unknown command:"));
         assert!(out.stderr.contains("--bogus"));
         assert!(out.stderr.contains("tuxixi --help"));
+    }
+
+    #[test]
+    fn help_and_version_aliases_work_without_dashes() {
+        let help = dispatch(&["help".to_string()]);
+        assert_eq!(help.exit_code, 0);
+        assert!(help.stdout.contains("COMMANDS"));
+        assert!(help.stdout.contains("tuxixi update"));
+
+        let version = dispatch(&["version".to_string()]);
+        assert_eq!(version.exit_code, 0);
+        assert!(version.stdout.contains("TUXIXI Terminal"));
+    }
+
+    #[test]
+    fn update_unknown_flag_prints_usage_and_exit_code_2() {
+        let out = dispatch(&["update".to_string(), "--bogus".to_string()]);
+        assert_eq!(out.exit_code, 2);
+        assert!(out.stderr.contains("unknown update flag"));
+        assert!(out.stderr.contains("unknown update flag: --bogus"));
+        assert!(out.stderr.contains("Usage: tuxixi update"));
+    }
+
+    #[test]
+    fn update_help_prints_usage_without_touching_the_network() {
+        let out = dispatch(&["update".to_string(), "--help".to_string()]);
+        assert_eq!(out.exit_code, 0);
+        assert!(out.stdout.contains("Usage: tuxixi update"));
+        assert!(out.stdout.contains("--self"));
+        assert!(out.stdout.contains("--theme"));
+        assert!(out.stdout.contains("--check"));
+        assert!(out.stdout.contains("hash"));
+        assert!(out.stderr.is_empty());
+    }
+
+    #[test]
+    fn help_documents_updates_and_themes() {
+        let out = dispatch(&["--help".to_string()]);
+        assert!(out.stdout.contains("UPDATES"));
+        assert!(out.stdout.contains("THEMES"));
+        assert!(out.stdout.contains("Tokyo Night"));
+        assert!(out.stdout.contains("~/.config/tuxixi/themes"));
     }
 
     #[test]

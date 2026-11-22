@@ -1,0 +1,28 @@
+[package]
+name = "tuxixi"
+version = "2.1.0"
+edition = "2021"
+description = "TUXIXI Terminal - Rust implementation (core, CLI and GTK4 GUI)"
+license = "GPL-3.0"
+
+[features]
+# The GTK4 GUI requires libgtk-4-dev and libvte-2.91-gtk4-dev (VTE 3.91)
+# at build time. The core library and the `tuxixi` CLI build without it:
+#   cargo build                    -> core + CLI
+#   cargo build --features gui     -> core + CLI + GTK4 terminal GUI
+gui = ["dep:gtk4", "dep:vte4"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+gtk4 = { version = "0.11", optional = true }
+vte4 = { version = "0.10", optional = true }
+
+[lib]
+name = "tuxixi"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tuxixi"
+path = "src/main.rs"

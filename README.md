@@ -80,6 +80,32 @@ If a local archive is found next to the installer, it is used directly and nothi
 - VTE (GTK4 / 3.91)
 - Python GObject Introspection bindings (`PyGObject`)
 
+## 🦀 Rust Rewrite (experimental)
+
+A full Rust port of TUXIXI lives in [`rust/`](rust/). It contains:
+
+- **`tuxixi` CLI** — the `--help / --version / --sys / --ip / --welcome`
+  commands, byte-for-byte ports of the original `bin/tuxixi` shell script.
+- **Core library** — settings manager (atomic writes, validation, legacy
+  `blur` key support), the 19 themes, dynamic tab title logic, global CSS
+  generation, wallpaper detection (KDE / LXQt / XFCE / GNOME / Cinnamon /
+  MATE / feh / nitrogen), `ll` and `cls` utilities, shell session setup.
+- **GTK4 GUI** (feature-gated) — the terminal window with tabs,
+  shortcuts, glass/blur modes, built with `gtk4-rs` + `vte4`.
+
+Build and test:
+
+```bash
+cd rust
+cargo test                        # 100 tests, no system deps needed
+cargo build --release --features gui   # GUI: needs GTK4 + VTE 3.91 dev libs
+```
+
+The core library and CLI are fully unit-tested (100 tests) and build
+without any system dependencies. The GUI feature requires `libgtk-4-dev`
+and `libvte-2.91-gtk4-dev` at build time and is exercised on a real
+desktop rather than by the headless test suite.
+
 ## ⌨️ TUXİXİ Commands
 
 TUXİXİ includes its own built-in commands:

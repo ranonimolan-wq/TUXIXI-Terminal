@@ -169,7 +169,7 @@ pub fn help_text() -> String {
     out.push_str(&format!("  {A}Ctrl+Shift+T{R}       {S}Change theme{R}\n"));
     out.push_str(&format!("  {A}Ctrl+Shift+O{R}       {S}Toggle glass mode (transparency){R}\n"));
     out.push_str(&format!("  {A}Ctrl+Shift+B{R}       {S}Cycle blur (Static / Smoky / Off){R}\n"));
-    out.push_str(&format!("  {A}Ctrl+Shift+-{R}       {S}Increase font size{R}\n"));
+    out.push_str(&format!("  {A}Ctrl+Shift+={R}       {S}Increase font size{R}\n"));
     out.push_str(&format!("  {A}Ctrl+Shift+-{R}       {S}Decrease font size{R}\n"));
     out.push_str(&format!("  {A}Ctrl+Shift+N{R}       {S}New window{R}\n\n"));
 

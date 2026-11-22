@@ -200,6 +200,14 @@ impl TuxixiWindow {
                 Self::refresh_tab_titles(&this);
             });
         }
+        // Exiting the shell (e.g. `exit`, Ctrl+D) closes the tab.
+        {
+            let this = this.clone();
+            let vte_for_exit = vte.clone();
+            vte.connect_child_exited(move |_, _status| {
+                Self::close_tab(&this, &vte_for_exit);
+            });
+        }
 
         Self::refresh_tab_titles(this);
         Self::select_tab(this, &vte);
@@ -411,9 +419,21 @@ impl TabItem {
         widget.add_controller(click);
         {
             let on_select = on_select.clone();
+            let close_btn = close_btn.clone();
             let gesture = GestureClick::new();
             gesture.set_button(1);
-            gesture.connect_pressed(move |gesture, _n, _x, _y| {
+            gesture.connect_pressed(move |gesture, _n, x, y| {
+                // Presses on the close button must reach the button itself:
+                // claiming the sequence here would cancel its click. So only
+                // claim and select when the press is elsewhere on the tab.
+                let alloc = close_btn.allocation();
+                let inside_close = x >= alloc.x() as f64
+                    && y >= alloc.y() as f64
+                    && x <= (alloc.x() + alloc.width()) as f64
+                    && y <= (alloc.y() + alloc.height()) as f64;
+                if inside_close {
+                    return;
+                }
                 gesture.set_state(gtk4::EventSequenceState::Claimed);
                 fire(&on_select);
             });

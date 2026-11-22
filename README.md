@@ -19,31 +19,28 @@ window with tabs, 19 themes and optional transparency (glass/blur).
 
 ## Install
 
-Grab the latest binary from [Releases](https://github.com/ranonimolan-wq/TUXIXI-Terminal/releases)
-or run the installer, which downloads and installs it into `~/.local` for you:
+Install the latest release with a single command — the installer downloads
+the binary and sets it up in `~/.local` for you:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ranonimolan-wq/TUXIXI-Terminal/main/install.sh | bash
 ```
 
-No root required. To uninstall, delete `~/.local/bin/tuxixi`, the
-`~/.local/share/applications/org.tuxixi.Terminal.desktop` file and
-`~/.local/share/icons/hicolor/512x512/apps/tuxixi-512.png`.
+No root required. The binary needs GTK4 and VTE 3.91 at runtime
+(`libgtk-4-1` and `libvte-2.91-gtk4-1` on Debian/Ubuntu, `vte4` on Arch,
+`vte291-gtk4` on Fedora — most desktop systems already have them).
 
-## Build from source
-
-The core library and CLI build anywhere; the GUI needs GTK4 and VTE 3.91
-development libraries at compile time.
+Prefer to review the script before running it?
 
 ```bash
-cargo build                                  # core + CLI, no system deps
-cargo build --release --features gui         # full GUI terminal
-cargo test                                   # run the test suite
+curl -fsSL -o install.sh https://raw.githubusercontent.com/ranonimolan-wq/TUXIXI-Terminal/main/install.sh
+less install.sh
+chmod +x install.sh && ./install.sh
 ```
 
-Runtime requirements for the GUI: Linux (X11 or Wayland), GTK4 and VTE 3.91
-(e.g. `libgtk-4-dev` and `libvte-2.91-gtk4-dev` on Debian/Ubuntu,
-`vte4` on Arch, `vte291-gtk4` on Fedora).
+To uninstall, delete `~/.local/bin/tuxixi`, the
+`~/.local/share/applications/org.tuxixi.Terminal.desktop` file and
+`~/.local/share/icons/hicolor/512x512/apps/tuxixi-512.png`.
 
 ## CLI
 

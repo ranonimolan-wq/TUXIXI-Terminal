@@ -31,7 +31,7 @@ use gtk4::{
 use vte4::prelude::*;
 use vte4::Terminal as VteTerminal;
 
-use crate::settings::{SettingsManager, BlurMode};
+use crate::settings::{SettingsManager, BlurMode, Settings};
 use crate::shell;
 #[allow(unused_imports)]
 use crate::theme;
@@ -140,7 +140,27 @@ impl TuxixiWindow {
 
         // First tab + initial blur badge state.
         Self::add_tab(&this);
-        this.borrow().apply_blur_state();
+        {
+            let s0 = this.borrow().settings.borrow().get().clone();
+            this.borrow().apply_blur_state(&s0);
+            this.borrow().apply_fonts(&s0);
+        }
+
+        // Live visual updates: whenever any setting actually changes
+        // (theme / glass / blur / font), refresh the blur badge and the
+        // terminal fonts. The global CSS is refreshed by its own
+        // listener registered in `apply_global_css`. The listener gets
+        // the new Settings snapshot, so it never re-borrows `settings`
+        // (which is still mutably borrowed inside `cycle_theme` etc.).
+        {
+            let this = this.clone();
+            let settings_rc = this.borrow().settings.clone();
+            settings_rc.borrow_mut().on_change(std::rc::Rc::new(move |s| {
+                let b = this.borrow();
+                b.apply_blur_state(s);
+                b.apply_fonts(s);
+            }));
+        }
 
         this
     }
@@ -317,8 +337,7 @@ impl TuxixiWindow {
         }
     }
 
-    fn apply_blur_state(&self) {
-        let s = self.settings.borrow().get().clone();
+    fn apply_blur_state(&self, s: &Settings) {
         self.static_bg_container
             .set_visible(s.blur_mode == BlurMode::Static);
         match s.blur_mode {
@@ -331,6 +350,17 @@ impl TuxixiWindow {
                 self.blur_badge.set_visible(true);
             }
             BlurMode::Off => self.blur_badge.set_visible(false),
+        }
+    }
+
+    /// Apply the configured font (family + size) to every open terminal.
+    /// Called on startup and on every settings change, so Ctrl+Shift+=
+    /// and Ctrl+Shift+- resize the terminals immediately.
+    fn apply_fonts(&self, s: &Settings) {
+        let desc =
+            gtk4::pango::FontDescription::from_string(&format!("{} {}", s.font, s.font_size));
+        for tab in &self.tabs {
+            tab.vte.set_font(Some(&desc));
         }
     }
 }
@@ -420,17 +450,22 @@ impl TabItem {
         {
             let on_select = on_select.clone();
             let close_btn = close_btn.clone();
+            let widget_for_click = widget.clone();
             let gesture = GestureClick::new();
             gesture.set_button(1);
             gesture.connect_pressed(move |gesture, _n, x, y| {
                 // Presses on the close button must reach the button itself:
                 // claiming the sequence here would cancel its click. So only
                 // claim and select when the press is elsewhere on the tab.
-                let alloc = close_btn.allocation();
-                let inside_close = x >= alloc.x() as f64
-                    && y >= alloc.y() as f64
-                    && x <= (alloc.x() + alloc.width()) as f64
-                    && y <= (alloc.y() + alloc.height()) as f64;
+                let inside_close = close_btn
+                    .compute_bounds(widget_for_click.upcast_ref::<gtk4::Widget>())
+                    .map(|rect| {
+                        x >= rect.x() as f64
+                            && y >= rect.y() as f64
+                            && x <= (rect.x() + rect.width()) as f64
+                            && y <= (rect.y() + rect.height()) as f64
+                    })
+                    .unwrap_or(false);
                 if inside_close {
                     return;
                 }
@@ -610,19 +645,34 @@ fn setup_session(vte: &VteTerminal) {
     let argv_full = shell::shell_argv(&shell_path);
     let argv: Vec<&str> = argv_full.iter().map(|s| s.as_str()).collect();
 
-    // TUXIXI environment + inherited environment.
-    let mut pairs: Vec<(String, String)> = shell::session_env(&bin_dir().to_string_lossy());
-    pairs.extend(std::env::vars());
+    // TUXIXI environment + inherited environment, with the TUXIXI bin
+    // dir merged into PATH (dedup, appended at the end) so the `ll` and
+    // `cls` wrappers installed next to the binary are always reachable
+    // inside the session.
+    let bin_dir = bin_dir();
+    let bin_dir_str = bin_dir.to_string_lossy().into_owned();
+    let mut pairs: Vec<(String, String)> = shell::session_env(&bin_dir_str);
+    for (k, v) in std::env::vars() {
+        if k == "PATH" {
+            pairs.push((k, shell::merge_path(&v, &bin_dir_str)));
+        } else {
+            pairs.push((k, v));
+        }
+    }
     let envv: Vec<String> = pairs.iter().map(|(k, v)| format!("{k}={v}")).collect();
     let envv: Vec<&str> = envv.iter().map(|s| s.as_str()).collect();
 
     let cwd = std::env::var("HOME").unwrap_or_else(|_| "/".into());
 
-    // Welcome banner (port of the tuxixi --welcome feed).
-    if let Ok(out) = std::process::Command::new("tuxixi").arg("--welcome").output() {
-        if out.status.success() && !out.stdout.is_empty() {
-            let text = String::from_utf8_lossy(&out.stdout).replace('\n', "\r\n");
-            vte.feed(text.as_bytes());
+    // Welcome banner (port of the tuxixi --welcome feed). Uses the
+    // running binary itself, so it works even when `tuxixi` is not on
+    // the session PATH yet.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Ok(out) = std::process::Command::new(exe).arg("--welcome").output() {
+            if out.status.success() && !out.stdout.is_empty() {
+                let text = String::from_utf8_lossy(&out.stdout).replace('\n', "\r\n");
+                vte.feed(text.as_bytes());
+            }
         }
     }
 
@@ -662,10 +712,13 @@ fn shell_env() -> String {
 }
 
 fn bin_dir() -> std::path::PathBuf {
+    // The directory that contains the running binary (e.g.
+    // ~/.local/bin). The old code appended a literal "bin" component,
+    // producing a nonexistent ~/.local/bin/bin path.
     std::env::current_exe()
         .ok()
-        .and_then(|p| p.parent().map(|d| d.join("bin")))
-        .unwrap_or_else(|| std::path::PathBuf::from("bin"))
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
 // ---------------------------------------------------------------------
@@ -700,4 +753,14 @@ fn apply_global_css(settings: &Rc<RefCell<SettingsManager>>) {
             gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
     }
+
+    // Live theme switching: reload the SAME provider whenever a setting
+    // changes. Reloading invalidates the styles, so Ctrl+Shift+T (theme),
+    // Ctrl+Shift+O (glass) and Ctrl+Shift+B (blur) take effect
+    // immediately without restarting. Without this listener the CSS was
+    // built exactly once at startup and theme changes were invisible.
+    settings.borrow_mut().on_change(std::rc::Rc::new(move |s| {
+        let css = crate::css::build_css(&s.theme, s.transparent, s.blur_mode);
+        provider.load_from_string(&css);
+    }));
 }

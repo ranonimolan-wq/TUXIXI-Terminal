@@ -12,10 +12,13 @@
 set -e
 
 REPO="ranonimolan-wq/TUXIXI-Terminal"
+RAW="https://raw.githubusercontent.com/$REPO/main"
 BIN_DIR="$HOME/.local/bin"
 USER_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
 ICON_DIR="$USER_DATA_DIR/icons/hicolor/512x512/apps"
 DESKTOP_DIR="$USER_DATA_DIR/applications"
+THEMES_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/tuxixi/themes"
+WRAPPER_MARKER="# tuxixi-managed"
 
 # ----------------------------------------------------------
 # 0. Helpers
@@ -75,18 +78,70 @@ tar -xzf "$TMP/tuxixi.tar.gz" -C "$TMP"
 ok "Extracted"
 
 # ----------------------------------------------------------
-# 2. Install
+# 2. Already-installed check (hash comparison, no versions)
 # ----------------------------------------------------------
 
-mkdir -p "$BIN_DIR" "$ICON_DIR" "$DESKTOP_DIR"
-
-step "Installing binary to $BIN_DIR ..."
-install -m 755 "$TMP/tuxixi" "$BIN_DIR/tuxixi"
-ok "Binary installed"
+ALREADY_INSTALLED=0
+if [ -f "$BIN_DIR/tuxixi" ] && cmp -s "$TMP/tuxixi" "$BIN_DIR/tuxixi"; then
+    ALREADY_INSTALLED=1
+    ok "TUXIXI is already installed and identical (hash match)"
+    echo "       binary is up to date, skipping the binary copy"
+else
+    step "Installing binary to $BIN_DIR ..."
+    install -m 755 "$TMP/tuxixi" "$BIN_DIR/tuxixi"
+    ok "Binary installed"
+fi
 
 step "Installing application icon..."
 [ -f "$TMP/tuxixi-512.png" ] && install -m 644 "$TMP/tuxixi-512.png" "$ICON_DIR/tuxixi-512.png"
 ok "Icon installed ($ICON_DIR/tuxixi-512.png)"
+
+# ----------------------------------------------------------
+# 3. Shell utilities: ll / cls wrappers
+# ----------------------------------------------------------
+
+mkdir -p "$BIN_DIR" "$ICON_DIR" "$DESKTOP_DIR"
+
+install_wrapper() { # install_wrapper <name>
+    target="$BIN_DIR/$1"
+    if [ -f "$target" ] && ! grep -q "$WRAPPER_MARKER" "$target" 2>/dev/null; then
+        echo "  ${AMBER}note:${RESET} existing $target is not TUXIXI's, left untouched"
+        return
+    fi
+    {
+        echo "$WRAPPER_MARKER"
+        echo "exec \"$BIN_DIR/tuxixi\" $1 \"\$@\""
+    } > "$target"
+    chmod 755 "$target"
+}
+
+step "Installing shell utilities (ll, cls)..."
+install_wrapper ll
+install_wrapper cls
+ok "Utilities installed (ll, cls)"
+
+# ----------------------------------------------------------
+# 4. Themes (Tokyo Night is the default; 30 built-ins)
+# ----------------------------------------------------------
+
+step "Downloading themes to $THEMES_DIR ..."
+mkdir -p "$THEMES_DIR"
+ADDED=0
+KEPT=0
+if fetch "$RAW/themes/manifest.json" "$TMP/manifest.json"; then
+    for f in $(grep -o '"[^"]*\.json"' "$TMP/manifest.json" | tr -d '"' | sort -u); do
+        case "$f" in *manifest.json) continue ;; esac
+        if [ -f "$THEMES_DIR/$f" ]; then
+            KEPT=$((KEPT + 1))   # never clobber user-edited themes
+        elif fetch "$RAW/themes/$f" "$THEMES_DIR/$f"; then
+            ADDED=$((ADDED + 1))
+        fi
+    done
+    ok "Themes ready: $ADDED new, $KEPT existing kept (default: Tokyo Night)"
+else
+    echo "  ${AMBER}note:${RESET} theme download failed (offline?) - not fatal."
+    echo "        TUXIXI still has 30 built-in themes embedded."
+fi
 
 step "Creating desktop entry..."
 cat > "$DESKTOP_DIR/org.tuxixi.Terminal.desktop" <<EOF
@@ -110,7 +165,7 @@ if need_cmd gtk-update-icon-cache && [ -d "$USER_DATA_DIR/icons/hicolor" ]; then
 fi
 
 # ----------------------------------------------------------
-# 3. Finish
+# 5. Finish
 # ----------------------------------------------------------
 
 case ":$PATH:" in
@@ -120,12 +175,23 @@ esac
 
 echo ""
 echo "  ${DIM}──────────────────────────────────${RESET}"
-echo "  ${BOLD}${PURPLE}◆ TUXIXI INSTALLED!${RESET}"
+if [ "$ALREADY_INSTALLED" = "1" ]; then
+    echo "  ${BOLD}${PURPLE}◆ TUXIXI ALREADY UP TO DATE!${RESET}"
+else
+    echo "  ${BOLD}${PURPLE}◆ TUXIXI INSTALLED!${RESET}"
+fi
 echo "  ${DIM}──────────────────────────────────${RESET}"
 echo ""
 echo "  Binary    : ${CYAN}$BIN_DIR/tuxixi${RESET}"
+echo "  Utilities : ${CYAN}$BIN_DIR/ll${RESET}, ${CYAN}$BIN_DIR/cls${RESET}"
 echo "  Icon      : ${CYAN}$ICON_DIR/tuxixi-512.png${RESET}"
 echo "  Desktop   : ${CYAN}$DESKTOP_DIR/org.tuxixi.Terminal.desktop${RESET}"
+echo "  Themes    : ${CYAN}$THEMES_DIR${RESET}"
+echo ""
+echo "  ${LIME}tuxixi --help${RESET}          ${S}commands + shortcuts${RESET}"
+echo "  ${LIME}tuxixi update --self${RESET}   ${S}update the binary (hash based)${RESET}"
+echo "  ${LIME}tuxixi update --theme${RESET}  ${S}refresh themes from the repo${RESET}"
+echo "  ${LIME}Ctrl+Shift+T${RESET}           ${S}change theme inside TUXIXI${RESET}"
 echo ""
 
 if [ "${PATH_NOTE:-0}" = "1" ]; then
@@ -143,8 +209,8 @@ if ! "$BIN_DIR/tuxixi" --version 2>/dev/null; then
 fi
 
 echo "  Launch TUXIXI from your application menu, or run"
-echo "  ${LIME}tuxixi${RESET} from a terminal. TUXIXI commands"
-echo "  (${LIME}tuxixi --help${RESET}) are available only inside TUXIXI Terminal."
+echo "  ${LIME}tuxixi${RESET} from a terminal. TUXIXI commands (${LIME}tuxixi --help${RESET})"
+echo "  and the ${LIME}ll${RESET} / ${LIME}cls${RESET} utilities work in every terminal."
 echo ""
 echo "  ${BOLD}${PURPLE}Thank you for choosing TUXIXI! <3${RESET}"
 echo ""

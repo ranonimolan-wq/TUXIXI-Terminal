@@ -2,6 +2,8 @@
 //!
 //! * `tuxixi --help | --version | --sys | --system | --ip | --welcome`
 //!   -> the CLI port of `bin/tuxixi` (always available).
+//! * `tuxixi update`, `tuxixi ll`, `tuxixi cls` -> subcommands used by
+//!   the shell wrappers installed next to the binary.
 //! * `tuxixi` with no arguments -> the GTK4 GUI when built with
 //!   `--features gui`, otherwise a helpful error.
 //! * anything else -> "Unknown command" + exit code 2 (never passed to
@@ -23,6 +25,8 @@ fn main() -> ExitCode {
         "--ip",
         "--welcome",
         "update",
+        "ll",
+        "cls",
     ];
     let is_cli = args
         .first()

@@ -2,7 +2,10 @@
 //! `~/.config/tuxixi/config.json` (the path is injectable for tests).
 //!
 //! The GObject signal `settings-changed` is replaced by listener
-//! callbacks registered with [`SettingsManager::on_change`].
+//! callbacks registered with [`SettingsManager::on_change`]. Each
+//! listener receives the NEW settings snapshot, so it never needs to
+//! re-borrow the manager (which would deadlock the GUI call sites that
+//! mutate settings through `RefCell::borrow_mut`).
 
 use std::fmt;
 use std::fs;
@@ -158,7 +161,7 @@ impl Settings {
     }
 }
 
-pub type ChangeListener = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+pub type ChangeListener = std::rc::Rc<dyn Fn(&Settings)>;
 
 pub struct SettingsManager {
     pub config_path: PathBuf,
@@ -240,6 +243,9 @@ impl SettingsManager {
         &self.data
     }
 
+    /// Register a listener invoked with the new [`Settings`] snapshot on
+    /// every actual change (theme, glass mode, blur, font...). This is
+    /// how the GUI re-applies its CSS and fonts live.
     pub fn on_change(&mut self, listener: ChangeListener) {
         self.listeners.push(listener);
     }
@@ -290,7 +296,7 @@ impl SettingsManager {
 
     fn notify_all(&self) {
         for l in &self.listeners {
-            l("settings-changed");
+            l(&self.data);
         }
     }
 }
@@ -476,7 +482,7 @@ mod tests {
         let mut mgr = SettingsManager::load(&path);
         let notified = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let n2 = notified.clone();
-        mgr.on_change(std::sync::Arc::new(move |_| {
+        mgr.on_change(std::rc::Rc::new(move |_s| {
             n2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }));
         assert!(!mgr.set(mgr.get().clone()));
@@ -500,6 +506,27 @@ mod tests {
         assert!(!mgr.change_font_size(1));
         assert!(mgr.change_font_size(-1));
         assert_eq!(mgr.get().font_size, MAX_FONT_SIZE - 1);
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn listener_receives_the_new_settings_snapshot() {
+        let dir = temp_config_dir("listener");
+        let path = dir.join("config.json");
+        let mut mgr = SettingsManager::load(&path);
+
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        let seen2 = seen.clone();
+        mgr.on_change(std::rc::Rc::new(move |s| {
+            seen2.borrow_mut().push(format!("{}@{}", s.theme, s.font_size));
+        }));
+
+        mgr.cycle_theme();
+        mgr.change_font_size(2);
+        let log = seen.borrow();
+        assert_eq!(log.len(), 2, "one notification per actual change");
+        assert!(log[0].ends_with("@11"), "font unchanged by theme cycle: {}", log[0]);
+        assert!(log[1].ends_with("@13"), "new font size delivered: {}", log[1]);
         fs::remove_dir_all(dir).ok();
     }
 

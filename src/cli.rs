@@ -5,6 +5,7 @@
 
 use std::io::Write;
 
+use crate::lsutil;
 use crate::sysinfo;
 use crate::update;
 
@@ -38,6 +39,12 @@ pub fn dispatch(args: &[String]) -> CliOutput {
         "--help" | "help" => out.stdout.push_str(&help_text()),
         "--version" | "version" => out.stdout.push_str(&sysinfo::format_version()),
         "update" => run_update_command(&args[1..], &mut out),
+        "ll" => run_ll(&args[1..], &mut out),
+        "cls" => {
+            // Clear screen: the ANSI sequence clears the visible area,
+            // the scrollback and homes the cursor (see lsutil::cls_string).
+            out.stdout.push_str(&lsutil::cls_string());
+        }
         "--system" | "--sys" => {
             let info = sysinfo::gather_sys();
             out.stdout.push_str(&sysinfo::format_sys(&info));
@@ -112,6 +119,28 @@ fn run_update_command(rest: &[String], out: &mut CliOutput) {
         Err(e) => {
             out.stderr.push_str(&format!(
                 "{RED}Update failed:{RESET} {e}\n",
+                RED = sysinfo::RED,
+                RESET = sysinfo::RESET
+            ));
+            out.exit_code = 1;
+        }
+    }
+}
+
+/// Handle `tuxixi ll [path]`: ls -lah style listing of a directory.
+fn run_ll(rest: &[String], out: &mut CliOutput) {
+    let target = rest.first().map(|s| s.as_str()).unwrap_or(".");
+    let path = std::path::Path::new(target);
+    match lsutil::ll_entries(path) {
+        Ok(entries) => {
+            for entry in &entries {
+                out.stdout.push_str(&lsutil::format_entry(entry));
+                out.stdout.push('\n');
+            }
+        }
+        Err(e) => {
+            out.stderr.push_str(&format!(
+                "{RED}ll: {target}: {e}{RESET}\n",
                 RED = sysinfo::RED,
                 RESET = sysinfo::RESET
             ));
@@ -333,6 +362,60 @@ mod tests {
         assert!(out.stdout.contains("THEMES"));
         assert!(out.stdout.contains("Tokyo Night"));
         assert!(out.stdout.contains("~/.config/tuxixi/themes"));
+    }
+
+    #[test]
+    fn ll_lists_a_temp_directory() {
+        let dir = std::env::temp_dir().join(format!(
+            "tuxixi-ll-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("zebra.txt"), "hello world").unwrap();
+        std::fs::create_dir_all(dir.join("alpha")).unwrap();
+        // Hidden files are not listed (like the original ll alias).
+        std::fs::write(dir.join(".hidden"), "x").unwrap();
+
+        let out = dispatch(&["ll".to_string(), dir.to_string_lossy().into_owned()]);
+        assert_eq!(out.exit_code, 0);
+        let lines: Vec<&str> = out.stdout.lines().collect();
+        assert_eq!(lines.len(), 2, "expected 2 entries, got: {}", out.stdout);
+        assert!(lines[0].ends_with("alpha/"), "dirs first: {}", lines[0]);
+        assert!(lines[0].starts_with('d'), "dir line: {}", lines[0]);
+        assert!(lines[1].ends_with("zebra.txt"));
+        assert!(lines[1].starts_with('-'));
+        assert!(lines[1].contains("11"), "size 11 visible: {}", lines[1]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn ll_errors_on_missing_path() {
+        let out = dispatch(&[
+            "ll".to_string(),
+            "/definitely/not/a/real/dir-tuxixi".to_string(),
+        ]);
+        assert_eq!(out.exit_code, 1);
+        assert!(out.stderr.contains("ll:"));
+        assert!(out.stdout.is_empty());
+    }
+
+    #[test]
+    fn ll_defaults_to_current_directory() {
+        let out = dispatch(&["ll".to_string()]);
+        // The cwd always exists in tests, so this must succeed.
+        assert_eq!(out.exit_code, 0);
+    }
+
+    #[test]
+    fn cls_prints_the_clear_sequence() {
+        let out = dispatch(&["cls".to_string()]);
+        assert_eq!(out.exit_code, 0);
+        assert_eq!(out.stdout, crate::lsutil::cls_string());
+        assert!(out.stderr.is_empty());
     }
 
     #[test]

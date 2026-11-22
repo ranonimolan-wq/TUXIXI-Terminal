@@ -16,8 +16,10 @@ gui = ["dep:gtk4", "dep:vte4"]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 libc = "0.2"
-gtk4 = { version = "0.11", optional = true }
-vte4 = { version = "0.10", optional = true }
+# vte4 0.10.0 is broken against gtk4 0.11 (missing gtk::Accessible), so the
+# gui feature pins the working pair: gtk4 0.10 + vte4 0.9.
+gtk4 = { version = "0.10", optional = true, features = ["v4_12"] }
+vte4 = { version = "0.9", optional = true }
 
 [lib]
 name = "tuxixi"

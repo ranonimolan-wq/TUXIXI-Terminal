@@ -28,10 +28,12 @@ use gtk4::{
     Application, ApplicationWindow, Button, CssProvider, EventControllerKey, EventControllerMotion,
     GestureClick, Label, Orientation, Overlay, Picture, PolicyType, ScrolledWindow, Stack,
 };
+use vte4::prelude::*;
 use vte4::Terminal as VteTerminal;
 
 use crate::settings::{SettingsManager, BlurMode};
 use crate::shell;
+#[allow(unused_imports)]
 use crate::theme;
 use crate::title;
 use crate::wallpaper;
@@ -41,7 +43,6 @@ pub const APP_ID: &str = "org.tuxixi.Terminal";
 struct Tab {
     vte: VteTerminal,
     widget: gtk4::Box,
-    page_name: String,
     item: TabItem,
 }
 
@@ -186,7 +187,6 @@ impl TuxixiWindow {
         this.borrow_mut().tabs.push(Tab {
             vte: vte.clone(),
             widget: widget.clone(),
-            page_name: page_name.clone(),
             item,
         });
         this.borrow_mut().stack.add_named(&widget, Some(&page_name));
@@ -225,10 +225,9 @@ impl TuxixiWindow {
         let dyn_title = dynamic_title(&tab.vte);
         b.window
             .set_title(Some(&title::window_title(Some(&dyn_title))));
-        if let Some(hadj) = b.tabs_scroller.hadjustment() {
-            let max = (hadj.upper() - hadj.page_size()).max(hadj.lower());
-            hadj.set_value(max);
-        }
+        let hadj = b.tabs_scroller.hadjustment();
+        let max = (hadj.upper() - hadj.page_size()).max(hadj.lower());
+        hadj.set_value(max);
     }
 
     fn switch_tab_relative(this: &WindowRef, delta: i32) {
@@ -390,11 +389,12 @@ impl TabItem {
         // Hover reveals the close button.
         let motion = EventControllerMotion::new();
         {
-            let close_btn = close_btn.clone();
-            motion.connect_enter(move |_, _, _| close_btn.set_opacity(1.0));
-            motion.connect_leave(move |_| close_btn.set_opacity(0.0));
+            let close_btn_enter = close_btn.clone();
+            motion.connect_enter(move |_, _, _| close_btn_enter.set_opacity(1.0));
+            let close_btn_leave = close_btn.clone();
+            motion.connect_leave(move |_| close_btn_leave.set_opacity(0.0));
         }
-        widget.add_controller(&motion);
+        widget.add_controller(motion);
 
         // Middle click closes (port of _on_pressed button==2); plain
         // clicks are handled by a click gesture that ignores the close
@@ -408,7 +408,7 @@ impl TabItem {
                 fire(&on_close);
             });
         }
-        widget.add_controller(&click);
+        widget.add_controller(click);
         {
             let on_select = on_select.clone();
             let gesture = GestureClick::new();
@@ -417,7 +417,7 @@ impl TabItem {
                 gesture.set_state(gtk4::EventSequenceState::Claimed);
                 fire(&on_select);
             });
-            widget.add_controller(&gesture);
+            widget.add_controller(gesture);
         }
 
         let on_close_btn = on_close.clone();
@@ -491,68 +491,68 @@ fn setup_key_controller(vte: &VteTerminal, this: WindowRef) {
             };
             if let Some(idx) = idx {
                 TuxixiWindow::select_tab_by_index(&this, idx as i32);
-                return glib::signal::Inhibit(true);
+                return glib::Propagation::Stop;
             }
         }
 
         if !ctrl_mod {
-            return glib::signal::Inhibit(false);
+            return glib::Propagation::Proceed;
         }
 
         // Ctrl+Tab / Ctrl+Shift+Tab -> switch tab.
         if matches!(keyval, Key::Tab | Key::ISO_Left_Tab | Key::KP_Tab) {
             let delta = if shift { -1 } else { 1 };
             TuxixiWindow::switch_tab_relative(&this, delta);
-            return glib::signal::Inhibit(true);
+            return glib::Propagation::Stop;
         }
         // Ctrl+PageUp/PageDown -> switch tab (no Shift, like Python).
         if !shift {
             if keyval == Key::Page_Down {
                 TuxixiWindow::switch_tab_relative(&this, 1);
-                return glib::signal::Inhibit(true);
+                return glib::Propagation::Stop;
             }
             if keyval == Key::Page_Up {
                 TuxixiWindow::switch_tab_relative(&this, -1);
-                return glib::signal::Inhibit(true);
+                return glib::Propagation::Stop;
             }
         }
 
         if !shift {
-            return glib::signal::Inhibit(false);
+            return glib::Propagation::Proceed;
         }
 
         match keyval {
             Key::C | Key::c => {
-                vte_for_keys.copy_clipboard();
-                glib::signal::Inhibit(true)
+                vte_for_keys.copy_clipboard_format(vte4::Format::Text);
+                glib::Propagation::Stop
             }
             Key::V | Key::v => {
                 vte_for_keys.paste_clipboard();
-                glib::signal::Inhibit(true)
+                glib::Propagation::Stop
             }
             Key::plus | Key::equal | Key::KP_Add => {
                 settings.borrow_mut().change_font_size(1);
-                glib::signal::Inhibit(true)
+                glib::Propagation::Stop
             }
             Key::minus | Key::underscore | Key::KP_Subtract => {
                 settings.borrow_mut().change_font_size(-1);
-                glib::signal::Inhibit(true)
+                glib::Propagation::Stop
             }
             Key::T | Key::t => {
                 settings.borrow_mut().cycle_theme();
-                glib::signal::Inhibit(true)
+                glib::Propagation::Stop
             }
             Key::O | Key::o => {
                 settings.borrow_mut().toggle_transparency();
-                glib::signal::Inhibit(true)
+                glib::Propagation::Stop
             }
             Key::B | Key::b => {
                 settings.borrow_mut().cycle_blur_mode();
-                glib::signal::Inhibit(true)
+                glib::Propagation::Stop
             }
             Key::Return | Key::KP_Enter => {
                 TuxixiWindow::add_tab(&this);
-                glib::signal::Inhibit(true)
+                glib::Propagation::Stop
             }
             Key::W | Key::w => {
                 let active = this.borrow().stack.visible_child();
@@ -565,17 +565,22 @@ fn setup_key_controller(vte: &VteTerminal, this: WindowRef) {
                 if let Some(v) = vte_to_close {
                     TuxixiWindow::close_tab(&this, &v);
                 }
-                glib::signal::Inhibit(true)
+                glib::Propagation::Stop
             }
             Key::N | Key::n => {
-                // New window: open a second top level window.
-                open_window(&this);
-                glib::signal::Inhibit(true)
+                // New window: activate the application again, which builds
+                // another top level window (same as running `tuxixi` twice).
+                if let Some(app) = this.borrow().window.application() {
+                    if let Some(app) = app.downcast::<Application>().ok() {
+                        app.activate();
+                    }
+                }
+                glib::Propagation::Stop
             }
-            _ => glib::signal::Inhibit(false),
+            _ => glib::Propagation::Proceed,
         }
     });
-    vte.add_controller(&ctrl);
+    vte.add_controller(ctrl);
 }
 
 /// Port of `_start_session`: feed the welcome banner, then spawn the
@@ -602,7 +607,7 @@ fn setup_session(vte: &VteTerminal) {
     }
 
     vte.spawn_async(
-        glib::PtyFlags::DEFAULT,
+        vte4::PtyFlags::DEFAULT,
         Some(&cwd),
         &argv,
         &envv,

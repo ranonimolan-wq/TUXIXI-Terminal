@@ -17,18 +17,15 @@ fetch() { # fetch <url> <output>
     else wget -qO "$2" "$1"; fi
 }
 
-TAG=$(fetch "https://api.github.com/repos/$REPO/releases/latest" /dev/stdout 2>/dev/null \
-    | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4)
-[ -n "$TAG" ] || { echo "error: could not determine the latest release"; exit 1; }
-
-ASSET="tuxixi-${TAG}-x86_64-linux.tar.gz"
-URL="https://github.com/$REPO/releases/download/$TAG/$ASSET"
+# Stable redirect: GitHub forwards this to the newest release asset,
+# so no GitHub API call (and no rate limit) is involved.
+URL="https://github.com/$REPO/releases/latest/download/tuxixi-x86_64-linux.tar.gz"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-echo "Downloading TUXIXI $TAG ..."
-fetch "$URL" "$TMP/$ASSET" || { echo "error: download failed ($URL)"; exit 1; }
-tar -xzf "$TMP/$ASSET" -C "$TMP"
+echo "Downloading TUXIXI ..."
+fetch "$URL" "$TMP/tuxixi.tar.gz" || { echo "error: download failed ($URL)"; exit 1; }
+tar -xzf "$TMP/tuxixi.tar.gz" -C "$TMP"
 
 mkdir -p "$BIN_DIR" "$ICON_DIR" "$DESKTOP_DIR"
 install -m 755 "$TMP/tuxixi" "$BIN_DIR/tuxixi"
@@ -50,4 +47,5 @@ case ":$PATH:" in
     *) echo "note: add TUXIXI to your PATH:  export PATH=\"$BIN_DIR:\$PATH\"" ;;
 esac
 
-echo "Installed TUXIXI $TAG to $BIN_DIR/tuxixi"
+"$BIN_DIR/tuxixi" --version
+echo "Installed to $BIN_DIR/tuxixi"

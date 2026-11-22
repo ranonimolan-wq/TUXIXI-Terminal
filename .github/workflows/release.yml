@@ -35,13 +35,14 @@ jobs:
 
       - name: Package
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
+          # Fixed asset name: lets the installer use the stable
+          # releases/latest/download/ redirect without any API call.
           mkdir -p dist
           cp target/release/tuxixi tuxixi-512.png dist/
-          tar -czf "dist/tuxixi-${TAG}-x86_64-linux.tar.gz" -C dist tuxixi tuxixi-512.png
+          tar -czf "dist/tuxixi-x86_64-linux.tar.gz" -C dist tuxixi tuxixi-512.png
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/tuxixi-*-x86_64-linux.tar.gz
+          files: dist/tuxixi-x86_64-linux.tar.gz
           generate_release_notes: true

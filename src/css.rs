@@ -6,7 +6,7 @@ use crate::settings::BlurMode;
 use crate::theme::{Registry, Theme, SMOKY_ALPHA, TRANSLUCENT_ALPHA};
 
 /// Build the application-wide CSS for the current visual state. Unknown
-/// theme names fall back to the default theme (Tokyo Night).
+/// theme names fall back to the default theme (TokyoNight).
 pub fn build_css(theme_name: &str, transparent: bool, blur_mode: BlurMode) -> String {
     let reg = Registry::global();
     let theme = reg
@@ -186,7 +186,7 @@ mod tests {
     fn unknown_theme_falls_back_to_tokyo_night() {
         let css = build_css("Bogus Theme", false, BlurMode::Off);
         assert!(css.contains("#1A1B26"));
-        assert!(css.contains("#A9B1D6"));
+        assert!(css.contains("#C0CAF5"));
     }
 
     #[test]
@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn curly_braces_are_balanced() {
-        let css = build_css("Tokyo Night", true, BlurMode::Smoky);
+        let css = build_css("TokyoNight", true, BlurMode::Smoky);
         assert_eq!(
             css.matches('{').count(),
             css.matches('}').count(),

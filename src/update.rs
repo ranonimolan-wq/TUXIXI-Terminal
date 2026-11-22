@@ -102,17 +102,37 @@ pub struct ManifestEntry {
 }
 
 fn is_safe_theme_file_name(name: &str) -> bool {
-    // Whitelist: plain file names like "tokyo-night.json". This rejects
-    // path traversal (../, sub/dir), absolute paths and control
-    // characters (note: JSON already decodes \\b, \\f, \\n escapes, so a
-    // literal backslash check alone would not be enough).
+    // Whitelist: plain file names like "tokyo-night.json" or
+    // "TokyoNight-Storm.itermcolors". This rejects path traversal,
+    // absolute paths and control characters (note: JSON already decodes
+    // \b, \f, \n escapes, so a literal backslash check alone would not
+    // be enough).
     !name.is_empty()
         && name.len() <= 128
-        && name.ends_with(".json")
+        && (name.ends_with(".json") || name.ends_with(".itermcolors"))
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
         && !name.starts_with('.')
+}
+
+/// Manifest paths may include the "upstream/" directory prefix (the
+/// vendored creator files). The only allowed directory prefix is
+/// `upstream`; the file part must be a safe theme file name.
+fn is_safe_manifest_path(path: &str) -> bool {
+    if path.starts_with('/') || path.ends_with('/') || path.contains("//") {
+        return false;
+    }
+    let components: Vec<&str> = path.split('/').collect();
+    let file = components[components.len() - 1];
+    if !is_safe_theme_file_name(file) {
+        return false;
+    }
+    match components.len() {
+        1 => true,
+        2 => components[0] == "upstream",
+        _ => false,
+    }
 }
 
 /// Parse a manifest.json string into entries. Rejects malformed hashes
@@ -129,7 +149,7 @@ pub fn parse_manifest(json: &str) -> Result<Vec<ManifestEntry>, String> {
     }
     let mut entries = Vec::new();
     for (file, hash) in themes {
-        if !is_safe_theme_file_name(file) {
+        if !is_safe_manifest_path(file) {
             return Err(format!("manifest contains unsafe file name: {file}"));
         }
         let hash = hash
@@ -144,6 +164,33 @@ pub fn parse_manifest(json: &str) -> Result<Vec<ManifestEntry>, String> {
         });
     }
     Ok(entries)
+}
+
+/// Parse the optional "retired" section of a manifest: file hashes of
+/// previously shipped built-in themes that are no longer distributed.
+/// Copies of these in the user themes directory are safe to delete
+/// (identified by hash, never by name alone).
+fn parse_retired(json: &str) -> Vec<ManifestEntry> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let Some(retired) = value.get("retired").and_then(|r| r.as_object()) else {
+        return Vec::new();
+    };
+    retired
+        .iter()
+        .filter_map(|(file, hash)| {
+            let hash = hash.as_str()?;
+            if is_safe_manifest_path(file) && hash.len() == 64 {
+                Some(ManifestEntry {
+                    file: file.clone(),
+                    sha256: hash.to_ascii_lowercase(),
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 fn theme_raw_url(file: &str) -> String {
@@ -161,12 +208,13 @@ pub struct ThemeUpdateReport {
     pub updated: Vec<String>,
     pub unchanged: Vec<String>,
     pub backed_up: Vec<String>,
+    pub removed: Vec<String>,
     pub failed: Vec<String>,
 }
 
 impl ThemeUpdateReport {
     pub fn changed_count(&self) -> usize {
-        self.added.len() + self.updated.len()
+        self.added.len() + self.updated.len() + self.removed.len()
     }
 
     pub fn summary(&self) -> String {
@@ -181,6 +229,9 @@ impl ThemeUpdateReport {
                 ""
             };
             lines.push(format!("  updated : {f}{note}"));
+        }
+        for f in &self.removed {
+            lines.push(format!("  removed : {f} (old built-in copy)"));
         }
         for f in &self.failed {
             lines.push(format!("  FAILED  : {f}"));
@@ -227,7 +278,7 @@ pub fn update_themes(
     }
 
     let mut report = ThemeUpdateReport::default();
-    for entry in entries {
+    for entry in &entries {
         let local_path = user_dir.join(&entry.file);
         let local_hash = hash_file(&local_path).ok();
 
@@ -271,6 +322,12 @@ pub fn update_themes(
             }
         }
 
+        // Nested manifest paths (upstream/...) need their subdirectory.
+        if let Some(parent) = local_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+        }
+
         write_bytes_atomic(&local_path, &bytes).map_err(|e| {
             report
                 .failed
@@ -284,7 +341,88 @@ pub fn update_themes(
             report.added.push(entry.file.clone());
         }
     }
+
+    cleanup_retired_files(user_dir, &raw, &entries, dry_run, &mut report);
     Ok(report)
+}
+
+/// Remove user-directory copies of RETIRED built-in themes. A file is
+/// only removed when its content hash exactly matches a retired entry,
+/// so user-created or user-modified themes are never touched.
+fn cleanup_retired_files(
+    user_dir: &Path,
+    raw_manifest: &str,
+    entries: &[ManifestEntry],
+    dry_run: bool,
+    report: &mut ThemeUpdateReport,
+) {
+    let retired = parse_retired(raw_manifest);
+    if retired.is_empty() {
+        return;
+    }
+    let listed: std::collections::HashSet<&str> =
+        entries.iter().map(|e| e.file.as_str()).collect();
+
+    for rel_path in collect_local_theme_files(user_dir) {
+        if listed.contains(rel_path.as_str()) {
+            continue;
+        }
+        let path = user_dir.join(&rel_path);
+        let Ok(hash) = hash_file(&path) else { continue };
+        if retired.iter().any(|r| r.sha256 == hash) {
+            if !dry_run {
+                if std::fs::remove_file(&path).is_err() {
+                    continue;
+                }
+                // Drop empty upstream/ directories left behind.
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::remove_dir(parent);
+                }
+            }
+            report.removed.push(rel_path);
+        }
+    }
+}
+
+/// Relative paths of all theme files under `user_dir` (depth-limited,
+/// sorted; .bak/.new temp files ignored).
+fn collect_local_theme_files(user_dir: &Path) -> Vec<String> {
+    const SUPPORTED: [&str; 6] = [
+        "json", "itermcolors", "toml", "yml", "yaml", "conf",
+    ];
+    fn walk(dir: &Path, rel: &str, depth: usize, out: &mut Vec<String>) {
+        if depth > 3 {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let mut paths: Vec<_> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
+        paths.sort();
+        for path in paths {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if name.starts_with('.') {
+                continue;
+            }
+            let child_rel = if rel.is_empty() {
+                name.clone()
+            } else {
+                format!("{rel}/{name}")
+            };
+            if path.is_dir() {
+                walk(&path, &child_rel, depth + 1, out);
+            } else if SUPPORTED
+                .iter()
+                .any(|ext| name.to_ascii_lowercase().ends_with(&format!(".{ext}")))
+            {
+                out.push(child_rel);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(user_dir, "", 0, &mut out);
+    out
 }
 
 fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -654,7 +792,7 @@ mod tests {
     #[test]
     fn parse_manifest_rejects_path_traversal() {
         let good = "0".repeat(64);
-        for bad in ["../evil.json", "sub/dir.json", "/abs.json", "", "..", "a\\b.json"] {
+        for bad in ["../evil.json", "sub/dir.json", "/abs.json", "", "..", "a\\b.json", "other/evil.json"] {
             let json = format!(
                 r##"{{"themes": {{"{bad}": "{good}"}}}}"##
             );
@@ -663,6 +801,9 @@ mod tests {
                 "must reject unsafe file name: {bad}"
             );
         }
+        // The vendored upstream prefix IS allowed.
+        let ok = format!(r##"{{"themes": {{"upstream/TokyoNight.itermcolors": "{good}"}}}}"##);
+        assert!(parse_manifest(&ok).is_ok());
     }
 
     // ------------------------------------------------------------------
@@ -674,6 +815,71 @@ mod tests {
         "nord.json": "HASH_NORD",
         "new-theme.json": "HASH_NEW"
     }}"#;
+
+    const RETIRED_MANIFEST: &str = r#"{"schema": 1, "themes": {
+        "upstream/New.itermcolors": "HASH_NEW"
+    }, "retired": {
+        "legacy-dark.json": "HASH_LEGACY"
+    }}"#;
+
+    #[test]
+    fn retired_theme_copies_are_removed_but_user_files_kept() {
+        let dir = temp_dir("themes-retired");
+        // legacy-dark.json is an exact copy of the retired built-in
+        // (hash matches) -> removed. user-own.json is the user's own
+        // file (not in the manifest, not retired) -> kept.
+        std::fs::write(dir.join("legacy-dark.json"), b"LEGACY-CONTENT").unwrap();
+        std::fs::write(dir.join("user-own.json"), b"USER-OWN").unwrap();
+
+        let mut f = FakeFetcher::new();
+        let manifest = RETIRED_MANIFEST.replacen("HASH_NEW", &fake_hash("new-v1"), 1)
+            .replacen("HASH_LEGACY", &fake_hash("LEGACY-CONTENT"), 1);
+        f.serve(MANIFEST_URL, manifest.as_bytes());
+        f.serve(&theme_raw_url("upstream/New.itermcolors"), b"new-v1");
+
+        let report = update_themes(&f, &dir, false, None).unwrap();
+        assert_eq!(report.removed, vec!["legacy-dark.json".to_string()]);
+        assert!(!dir.join("legacy-dark.json").exists(), "retired copy deleted");
+        assert!(dir.join("user-own.json").exists(), "user file kept");
+        assert!(dir.join("upstream/New.itermcolors").exists());
+        assert_eq!(report.added, vec!["upstream/New.itermcolors".to_string()]);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn modified_retired_theme_files_are_never_removed() {
+        let dir = temp_dir("themes-retired-mod");
+        // The user edited the old file -> hash no longer matches the
+        // retired entry -> must be kept.
+        std::fs::write(dir.join("legacy-dark.json"), b"USER EDITED").unwrap();
+
+        let mut f = FakeFetcher::new();
+        let manifest = RETIRED_MANIFEST.replacen("HASH_NEW", &fake_hash("new-v1"), 1)
+            .replacen("HASH_LEGACY", &fake_hash("LEGACY-CONTENT"), 1);
+        f.serve(MANIFEST_URL, manifest.as_bytes());
+        f.serve(&theme_raw_url("upstream/New.itermcolors"), b"new-v1");
+
+        let report = update_themes(&f, &dir, false, None).unwrap();
+        assert!(report.removed.is_empty());
+        assert!(dir.join("legacy-dark.json").exists());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn dry_run_reports_retired_removals_without_deleting() {
+        let dir = temp_dir("themes-retired-dry");
+        std::fs::write(dir.join("legacy-dark.json"), b"LEGACY-CONTENT").unwrap();
+
+        let mut f = FakeFetcher::new();
+        let manifest = RETIRED_MANIFEST.replacen("HASH_NEW", &fake_hash("new-v1"), 1)
+            .replacen("HASH_LEGACY", &fake_hash("LEGACY-CONTENT"), 1);
+        f.serve(MANIFEST_URL, manifest.as_bytes());
+
+        let report = update_themes(&f, &dir, true, None).unwrap();
+        assert_eq!(report.removed, vec!["legacy-dark.json".to_string()]);
+        assert!(dir.join("legacy-dark.json").exists(), "dry run must not delete");
+        std::fs::remove_dir_all(dir).ok();
+    }
 
     fn fake_hash(label: &str) -> String {
         sha256_hex(label.as_bytes())

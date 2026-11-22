@@ -15,7 +15,7 @@ Actions.
 
 The GUI is GTK4 + VTE, so you get a real terminal — your own shell (Bash, Zsh,
 Fish), scrollback, copy/paste, TrueColor — wrapped in a small, customizable
-window with tabs, 30 themes and optional transparency (glass/blur).
+window with tabs, 32 themes and optional transparency (glass/blur).
 
 ## Install
 
@@ -53,25 +53,52 @@ tuxixi --ip          # interface, internal and external IP
 
 ## Themes
 
-TUXIXI ships with 30 built-in themes — Tokyo Night is the default, plus
-Dracula, Nord, Gruvbox, Catppuccin, Rosé Pine, Kanagawa and more. Cycle
-through them with `Ctrl+Shift+T`.
+TUXIXI ships with **32 built-in themes — the real upstream theme files**,
+fetched straight from their creators (via the MIT-licensed
+[iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes)
+collection): TokyoNight (the default), Dracula, Nord, Gruvbox Dark/Light,
+Catppuccin (all four flavors), Solarized, Rosé Pine, Kanagawa, Everforest,
+and more. Because the original files are used as-is, each theme carries
+its complete 16-color ANSI palette, not just a background/foreground
+pair.
 
-You can add your own themes: drop a JSON file into
-`~/.config/tuxixi/themes/` and it is picked up on the next start (it
-cycles together with the built-ins, and a file with the same name as a
-built-in overrides it):
+Change the theme with `Ctrl+Shift+T`, or from the command line:
+
+```bash
+tuxixi theme list         # show all themes (current one marked)
+tuxixi theme set Dracula  # switch and persist
+tuxixi theme next         # cycle
+```
+
+### Your own themes — any format
+
+Drop theme files into `~/.config/tuxixi/themes/` — the directory is
+scanned recursively, so you can `git clone` a whole theme repository
+into it and TUXIXI picks the files up on the next start. Supported
+formats, parsed directly without any conversion:
+
+| Format | Files | Source example |
+| --- | --- | --- |
+| iTerm2 | `.itermcolors` | `git clone https://github.com/mbadolato/iTerm2-Color-Schemes ~/.config/tuxixi/themes/` |
+| Alacritty | `.toml`, `.yml` | `git clone https://github.com/alacritty/alacritty-theme ~/.config/tuxixi/themes/` |
+| kitty | `.conf` | any kitty theme collection |
+| TUXIXI native | `.json` | see below |
 
 ```json
 {
   "name": "My Theme",
   "background": "#1A1B26",
   "foreground": "#A9B1D6",
-  "cursor": "#A9B1D6"
+  "cursor": "#A9B1D6",
+  "palette": ["#000000", "... up to 16 colors ..."]
 }
 ```
 
-Only `cursor` is optional — it defaults to the foreground color.
+Only `cursor` is optional (defaults to the foreground); `palette` is
+optional too. A user file whose display name matches a built-in
+overrides it. Old hand-made theme copies that were once installed are
+detected by hash and cleaned up automatically by `tuxixi update --theme`
+— files you created or edited yourself are never touched.
 
 ## Updates
 

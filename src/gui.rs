@@ -144,6 +144,7 @@ impl TuxixiWindow {
             let s0 = this.borrow().settings.borrow().get().clone();
             this.borrow().apply_blur_state(&s0);
             this.borrow().apply_fonts(&s0);
+            this.borrow().apply_colors(&s0);
         }
 
         // Live visual updates: whenever any setting actually changes
@@ -159,6 +160,7 @@ impl TuxixiWindow {
                 let b = this.borrow();
                 b.apply_blur_state(s);
                 b.apply_fonts(s);
+                b.apply_colors(s);
             }));
         }
 
@@ -361,6 +363,40 @@ impl TuxixiWindow {
             gtk4::pango::FontDescription::from_string(&format!("{} {}", s.font, s.font_size));
         for tab in &self.tabs {
             tab.vte.set_font(Some(&desc));
+        }
+    }
+
+    /// Apply the theme colors DIRECTLY to every VTE terminal (not just
+    /// via CSS). VTE paints its own background, so in glass modes the
+    /// terminal area would stay black no matter what the CSS said -
+    /// this was the reported "arka fon değişmiyor" bug. With
+    /// set_colors the theme background, foreground, cursor and the full
+    /// 16-color ANSI palette of the upstream theme file are applied,
+    /// and switching themes (Ctrl+Shift+T / `tuxixi theme set`) is
+    /// visible immediately in every mode.
+    fn apply_colors(&self, s: &Settings) {
+        let reg = theme::Registry::global();
+        let theme = reg
+            .get(&s.theme)
+            .unwrap_or_else(|| reg.fallback())
+            .clone();
+        let (bg, fg) = theme::get_colors(&s.theme, s.transparent, s.blur_mode.as_str());
+        let to_gdk = |c: theme::Rgba| {
+            gdk::RGBA::new(c.r as f32, c.g as f32, c.b as f32, c.a as f32)
+        };
+        let gdk_bg = to_gdk(bg);
+        let gdk_fg = to_gdk(fg);
+        let gdk_cursor = to_gdk(theme::Rgba::opaque(&theme.cursor));
+        let palette: Vec<gdk::RGBA> = theme
+            .palette
+            .iter()
+            .filter_map(|hex| theme::Rgba::parse_hex(hex).map(to_gdk))
+            .collect();
+        let palette_refs: Vec<&gdk::RGBA> = palette.iter().collect();
+        for tab in &self.tabs {
+            tab.vte
+                .set_colors(Some(&gdk_fg), Some(&gdk_bg), &palette_refs);
+            tab.vte.set_color_cursor(Some(&gdk_cursor));
         }
     }
 }

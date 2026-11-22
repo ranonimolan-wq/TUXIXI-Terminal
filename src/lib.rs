@@ -13,6 +13,7 @@ pub mod settings;
 pub mod shell;
 pub mod sysinfo;
 pub mod theme;
+pub mod theme_formats;
 pub mod title;
 pub mod update;
 pub mod wallpaper;

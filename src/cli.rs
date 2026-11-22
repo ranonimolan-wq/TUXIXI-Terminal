@@ -39,6 +39,7 @@ pub fn dispatch(args: &[String]) -> CliOutput {
         "--help" | "help" => out.stdout.push_str(&help_text()),
         "--version" | "version" => out.stdout.push_str(&sysinfo::format_version()),
         "update" => run_update_command(&args[1..], &mut out),
+        "theme" => run_theme_command(&args[1..], &mut out),
         "ll" => run_ll(&args[1..], &mut out),
         "cls" => {
             // Clear screen: the ANSI sequence clears the visible area,
@@ -149,6 +150,125 @@ fn run_ll(rest: &[String], out: &mut CliOutput) {
     }
 }
 
+/// Handle `tuxixi theme ...`: inspect and change the active theme.
+fn run_theme_command(rest: &[String], out: &mut CliOutput) {
+    run_theme_command_at(rest, out, None);
+}
+
+/// The real worker; `config_override` injects the config path for tests.
+fn run_theme_command_at(rest: &[String], out: &mut CliOutput, config_override: Option<&std::path::Path>) {
+    let mut mgr = match config_override {
+        Some(p) => crate::settings::SettingsManager::load(p),
+        None => crate::settings::SettingsManager::load_default_location(),
+    };
+    let sub = rest.first().map(|s| s.as_str()).unwrap_or("list");
+
+    let usage = "Usage: tuxixi theme [list | current | set <name> | next]\n".to_string();
+    match sub {
+        "--help" | "help" | "-h" => {
+            out.stdout.push_str(&usage);
+            out.stdout.push_str("\n  tuxixi theme             list all themes (current one marked)\n");
+            out.stdout.push_str("  tuxixi theme current     print the active theme name\n");
+            out.stdout.push_str("  tuxixi theme set <name>  switch the theme (persisted)\n");
+            out.stdout.push_str("  tuxixi theme next        cycle to the next theme\n");
+            out.stdout.push_str("\nUser themes (any format) go into ~/.config/tuxixi/themes/\n");
+        }
+        "list" => {
+            let reg = crate::theme::Registry::global();
+            let current = mgr.get().theme.clone();
+            out.stdout.push_str(&format!(
+                "{PURPLE}\u{25c6} TUXIXI THEMES{RESET}\n",
+                PURPLE = sysinfo::PURPLE,
+                RESET = sysinfo::RESET
+            ));
+            for name in reg.names() {
+                if name == current {
+                    out.stdout.push_str(&format!(
+                        "  {LIME}\u{25cf} {name}{RESET}   {S}(current){RESET}\n",
+                        LIME = sysinfo::LIME,
+                        RESET = sysinfo::RESET,
+                        S = sysinfo::SLATE
+                    ));
+                } else {
+                    out.stdout.push_str(&format!(
+                        "  {S}\u{25cb} {name}{RESET}\n",
+                        S = sysinfo::SLATE,
+                        RESET = sysinfo::RESET
+                    ));
+                }
+            }
+            out.stdout.push_str(&format!(
+                "\n{} themes available. Change with {LIME}tuxixi theme set <name>{RESET}\nor {LIME}Ctrl+Shift+T{RESET} inside TUXIXI.\n",
+                reg.len(),
+                RESET = sysinfo::RESET,
+                LIME = sysinfo::LIME
+            ));
+        }
+        "current" => {
+            out.stdout.push_str(&format!("{}\n", mgr.get().theme));
+        }
+        "set" => {
+            let Some(name) = rest.get(1) else {
+                out.stderr.push_str(&format!(
+                    "{RED}tuxixi theme set: missing theme name{RESET}\n",
+                    RED = sysinfo::RED,
+                    RESET = sysinfo::RESET
+                ));
+                out.stderr.push_str(&usage);
+                out.exit_code = 2;
+                return;
+            };
+            let reg = crate::theme::Registry::global();
+            if reg.get(name).is_none() {
+                out.stderr.push_str(&format!(
+                    "{RED}Unknown theme:{RESET} {name}\n",
+                    RED = sysinfo::RED,
+                    RESET = sysinfo::RESET
+                ));
+                out.stderr.push_str(&format!(
+                    "Run {LIME}tuxixi theme list{RESET} to see available themes.\n",
+                    LIME = sysinfo::LIME,
+                    RESET = sysinfo::RESET
+                ));
+                out.exit_code = 2;
+                return;
+            }
+            let mut s = mgr.get().clone();
+            s.theme = name.clone();
+            if mgr.set(s) {
+                out.stdout.push_str(&format!(
+                    "{LIME}\u{2713}{RESET} Theme set to {name}\n",
+                    LIME = sysinfo::LIME,
+                    RESET = sysinfo::RESET
+                ));
+            } else {
+                out.stdout.push_str(&format!("Theme '{name}' is already active.\n"));
+            }
+        }
+        "next" => {
+            if mgr.cycle_theme() {
+                out.stdout.push_str(&format!(
+                    "{LIME}\u{2713}{RESET} Theme: {}\n",
+                    mgr.get().theme,
+                    LIME = sysinfo::LIME,
+                    RESET = sysinfo::RESET
+                ));
+            } else {
+                out.stdout.push_str("Theme unchanged.\n");
+            }
+        }
+        other => {
+            out.stderr.push_str(&format!(
+                "{RED}Unknown theme command:{RESET} {other}\n",
+                RED = sysinfo::RED,
+                RESET = sysinfo::RESET
+            ));
+            out.stderr.push_str(&usage);
+            out.exit_code = 2;
+        }
+    }
+}
+
 fn gather_ip() -> sysinfo::IpInfo {
     let (internal, iface) = internal_ip_and_iface();
     let external = if internal.is_some() { external_ip() } else { None };
@@ -231,9 +351,14 @@ pub fn help_text() -> String {
     out.push_str(&format!("  {L}tuxixi update --check{R}   {S}Only show what would change{R}\n\n"));
 
     out.push_str(&format!("{B}{C}THEMES{R}\n"));
-    out.push_str(&format!("  {S}30 built-in themes, default: {DEFAULT}{R}\n", DEFAULT = crate::theme::DEFAULT_THEME));
-    out.push_str(&format!("  {S}Add your own JSON files to:{R}\n"));
-    out.push_str(&format!("  {L}~/.config/tuxixi/themes/*.json{R}   {S}(they override built-ins){R}\n\n"));
+    out.push_str(&format!("  {S}32 built-in themes (the real upstream files), default: {DEFAULT}{R}\n", DEFAULT = crate::theme::DEFAULT_THEME));
+    out.push_str(&format!("  {L}tuxixi theme list{R}       {S}Show all themes (current one marked){R}\n"));
+    out.push_str(&format!("  {L}tuxixi theme set <name>{R} {S}Switch the theme{R}\n"));
+    out.push_str(&format!("  {L}tuxixi theme next{R}       {S}Cycle to the next theme{R}\n"));
+    out.push_str(&format!("  {L}Ctrl+Shift+T{R}            {S}Cycle theme inside TUXIXI{R}\n"));
+    out.push_str(&format!("  {S}Drop your own themes (JSON / iTerm2 .itermcolors / Alacritty{R}\n"));
+    out.push_str(&format!("  {S}.toml/.yml / kitty .conf) into:{R}\n"));
+    out.push_str(&format!("  {L}~/.config/tuxixi/themes/{R}   {S}(a cloned theme repo works too){R}\n\n"));
 
     out.push_str(&format!("{B}{C}UTILITIES{R}\n"));
     out.push_str(&format!("  {L}ll{R}                 {S}List directory contents{R}\n"));
@@ -360,7 +485,7 @@ mod tests {
         let out = dispatch(&["--help".to_string()]);
         assert!(out.stdout.contains("UPDATES"));
         assert!(out.stdout.contains("THEMES"));
-        assert!(out.stdout.contains("Tokyo Night"));
+        assert!(out.stdout.contains("TokyoNight"));
         assert!(out.stdout.contains("~/.config/tuxixi/themes"));
     }
 
@@ -416,6 +541,114 @@ mod tests {
         assert_eq!(out.exit_code, 0);
         assert_eq!(out.stdout, crate::lsutil::cls_string());
         assert!(out.stderr.is_empty());
+    }
+
+    #[test]
+    fn theme_help_prints_usage() {
+        let out = dispatch(&["theme".to_string(), "--help".to_string()]);
+        assert_eq!(out.exit_code, 0);
+        assert!(out.stdout.contains("Usage: tuxixi theme"));
+        assert!(out.stdout.contains("theme set"));
+        assert!(out.stdout.contains("~/.config/tuxixi/themes"));
+    }
+
+    fn temp_theme_config(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "tuxixi-theme-cfg-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("config.json")
+    }
+
+    #[test]
+    fn theme_lists_builtin_themes_with_current_marker() {
+        let cfg = temp_theme_config("list");
+        let mut out = CliOutput::new();
+        run_theme_command_at(&[], &mut out, Some(&cfg));
+        assert_eq!(out.exit_code, 0);
+        assert!(out.stdout.contains("TUXIXI THEMES"));
+        assert!(out.stdout.contains("TokyoNight"));
+        assert!(out.stdout.contains("Dracula"));
+        assert!(out.stdout.contains("(current)"), "default must be marked: {}", out.stdout);
+    }
+
+    #[test]
+    fn theme_current_prints_the_active_theme() {
+        let cfg = temp_theme_config("current");
+        let mut out = CliOutput::new();
+        run_theme_command_at(&["current".to_string()], &mut out, Some(&cfg));
+        assert_eq!(out.exit_code, 0);
+        assert_eq!(out.stdout.trim(), crate::theme::DEFAULT_THEME);
+    }
+
+    #[test]
+    fn theme_set_persists_to_config() {
+        let cfg = temp_theme_config("set");
+        let mut out = CliOutput::new();
+        run_theme_command_at(&["set".to_string(), "Dracula".to_string()], &mut out, Some(&cfg));
+        assert_eq!(out.exit_code, 0);
+        assert!(out.stdout.contains("Dracula"));
+        // The change must be persisted.
+        let content = std::fs::read_to_string(&cfg).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed["theme"], "Dracula");
+        // Setting it again reports "already active" without error.
+        let mut out2 = CliOutput::new();
+        run_theme_command_at(&["set".to_string(), "Dracula".to_string()], &mut out2, Some(&cfg));
+        assert_eq!(out2.exit_code, 0);
+        assert!(out2.stdout.contains("already active"));
+        std::fs::remove_dir_all(cfg.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn theme_set_unknown_theme_errors() {
+        let cfg = temp_theme_config("setbad");
+        let mut out = CliOutput::new();
+        run_theme_command_at(&["set".to_string(), "Nope".to_string()], &mut out, Some(&cfg));
+        assert_eq!(out.exit_code, 2);
+        assert!(out.stderr.contains("Unknown theme:"));
+        assert!(out.stderr.contains("Nope"));
+        assert!(out.stderr.contains("theme list"));
+    }
+
+    #[test]
+    fn theme_set_without_name_gives_usage() {
+        let cfg = temp_theme_config("setnoarg");
+        let mut out = CliOutput::new();
+        run_theme_command_at(&["set".to_string()], &mut out, Some(&cfg));
+        assert_eq!(out.exit_code, 2);
+        assert!(out.stderr.contains("missing theme name"));
+    }
+
+    #[test]
+    fn theme_next_cycles_away_from_the_default() {
+        let cfg = temp_theme_config("next");
+        let mut out = CliOutput::new();
+        run_theme_command_at(&["next".to_string()], &mut out, Some(&cfg));
+        assert_eq!(out.exit_code, 0);
+        assert!(out.stdout.contains("Theme: "));
+        let content = std::fs::read_to_string(&cfg).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_ne!(parsed["theme"], serde_json::json!(crate::theme::DEFAULT_THEME));
+        // And the new theme must be a real one.
+        let new_name = parsed["theme"].as_str().unwrap();
+        assert!(crate::theme::Registry::global().get(new_name).is_some());
+        std::fs::remove_dir_all(cfg.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn theme_unknown_subcommand_errors() {
+        let cfg = temp_theme_config("bogus");
+        let mut out = CliOutput::new();
+        run_theme_command_at(&["bogus".to_string()], &mut out, Some(&cfg));
+        assert_eq!(out.exit_code, 2);
+        assert!(out.stderr.contains("Unknown theme command:"));
+        assert!(out.stderr.contains("bogus"));
     }
 
     #[test]

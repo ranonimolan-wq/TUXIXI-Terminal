@@ -121,26 +121,29 @@ install_wrapper cls
 ok "Utilities installed (ll, cls)"
 
 # ----------------------------------------------------------
-# 4. Themes (Tokyo Night is the default; 30 built-ins)
+# 4. Themes (TokyoNight is the default; 32 creator originals)
 # ----------------------------------------------------------
 
 step "Downloading themes to $THEMES_DIR ..."
 mkdir -p "$THEMES_DIR"
-ADDED=0
-KEPT=0
 if fetch "$RAW/themes/manifest.json" "$TMP/manifest.json"; then
-    for f in $(grep -o '"[^"]*\.json"' "$TMP/manifest.json" | tr -d '"' | sort -u); do
-        case "$f" in *manifest.json) continue ;; esac
-        if [ -f "$THEMES_DIR/$f" ]; then
-            KEPT=$((KEPT + 1))   # never clobber user-edited themes
-        elif fetch "$RAW/themes/$f" "$THEMES_DIR/$f"; then
-            ADDED=$((ADDED + 1))
-        fi
-    done
-    ok "Themes ready: $ADDED new, $KEPT existing kept (default: Tokyo Night)"
+    # Only the "themes" section; "retired" entries no longer exist upstream.
+    sed -n '/"themes"/,/"retired"/p' "$TMP/manifest.json" \
+        | grep -o '"[^"]*\.\(json\|itermcolors\)"' | tr -d '"' | sort -u \
+        | while read -r f; do
+            case "$f" in
+                *manifest.json) continue ;;
+            esac
+            if [ -f "$THEMES_DIR/$f" ]; then
+                continue   # never clobber user-edited themes
+            fi
+            mkdir -p "$THEMES_DIR/$(dirname "$f")"
+            fetch "$RAW/themes/$f" "$THEMES_DIR/$f" || rm -f "$THEMES_DIR/$f"
+        done
+    ok "Themes ready under $THEMES_DIR (default: TokyoNight, 32 built-in)"
 else
     echo "  ${AMBER}note:${RESET} theme download failed (offline?) - not fatal."
-    echo "        TUXIXI still has 30 built-in themes embedded."
+    echo "        TUXIXI still has 32 built-in themes embedded."
 fi
 
 step "Creating desktop entry..."

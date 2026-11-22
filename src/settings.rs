@@ -386,7 +386,7 @@ mod tests {
         let s = Settings::default();
         assert_eq!(s.font, "Monospace");
         assert_eq!(s.font_size, 11);
-        assert_eq!(s.theme, "Tokyo Night");
+        assert_eq!(s.theme, "TokyoNight");
         assert!(!s.transparent);
         assert_eq!(s.blur_mode, BlurMode::Off);
     }
@@ -442,7 +442,7 @@ mod tests {
         assert!(path.exists());
         let content = fs::read_to_string(&path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-        assert_eq!(parsed["theme"], "Tokyo Night");
+        assert_eq!(parsed["theme"], "TokyoNight");
         fs::remove_dir_all(dir).ok();
     }
 
@@ -536,12 +536,19 @@ mod tests {
         let path = dir.join("config.json");
         let mut mgr = SettingsManager::load(&path);
 
-        let names = Registry::builtin().names();
-        assert_eq!(names[8], "Tokyo Night"); // DEFAULT_THEME index
+        // cycle_theme walks the GLOBAL registry (built-ins first, then
+        // any user themes found on this machine). Compute the expected
+        // sequence from the same source so the test is deterministic
+        // regardless of the local user theme directory.
+        let names = Registry::global().names();
+        let default_pos = names
+            .iter()
+            .position(|n| n == crate::theme::DEFAULT_THEME)
+            .expect("default theme must be in the registry");
 
-        // Default is "Tokyo Night" (index 8) -> cycles to index 9.
+        // Default theme cycles to whatever follows it in the list.
         assert!(mgr.cycle_theme());
-        assert_eq!(mgr.get().theme, names[9]);
+        assert_eq!(mgr.get().theme, names[(default_pos + 1) % names.len()]);
 
         // Jump to the last theme and cycle: must wrap to the first.
         let mut s = mgr.get().clone();
@@ -550,7 +557,7 @@ mod tests {
         assert!(mgr.cycle_theme());
         assert_eq!(mgr.get().theme, names[0]);
 
-        // Invalid theme resets to the first (Matrix).
+        // Invalid theme resets to the first registry entry.
         let mut s = mgr.get().clone();
         s.theme = "Bogus".into();
         mgr.set(s);
@@ -612,7 +619,7 @@ mod tests {
     #[test]
     fn validity_helpers() {
         assert!(is_valid_theme("Dracula"));
-        assert!(is_valid_theme("Tokyo Night"));
+        assert!(is_valid_theme("TokyoNight"));
         assert!(!is_valid_theme("dracula"));
         assert!(!is_valid_theme("Nope"));
         assert!(is_valid_blur_mode("smoky"));

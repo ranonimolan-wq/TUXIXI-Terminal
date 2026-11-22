@@ -1,61 +1,59 @@
-//! Theme system: the built-in themes live as JSON files in `themes/` and
-//! are embedded into the binary at compile time; user themes can be
-//! dropped into `~/.config/tuxixi/themes/` and override built-ins with
-//! the same name. No GTK dependency: colors are plain RGBA values.
-//!
-//! Theme file format (`themes/tokyo-night.json`):
-//!
-//! ```json
-//! {
-//!   "name": "Tokyo Night",
-//!   "background": "#1A1B26",
-//!   "foreground": "#A9B1D6",
-//!   "cursor": "#A9B1D6"
-//! }
-//! ```
-//!
-//! Only `cursor` is optional (it defaults to the foreground color).
+//! Theme system: the built-in themes are the REAL upstream theme files
+//! (published by their original creators) in `themes/upstream/`,
+//! embedded into the binary at compile time and parsed by
+//! [`crate::theme_formats`]. Users can drop their own theme files in
+//! ANY supported format (`.itermcolors`, Alacritty `.toml`/`.yml`,
+//! kitty `.conf`, or native `.json`) into `~/.config/tuxixi/themes/` -
+//! the directory is scanned recursively, so a whole cloned theme
+//! repository works too. A user file overrides a built-in with the same
+//! display name. No GTK dependency: colors are plain RGBA values.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_THEME: &str = "Tokyo Night";
+use crate::theme_formats;
 
-/// The built-in theme files embedded into the binary (file name, JSON).
-/// The order defines the theme cycling sequence (Ctrl+Shift+T).
+pub const DEFAULT_THEME: &str = "TokyoNight";
+
+/// The built-in theme files embedded into the binary (manifest-relative
+/// path, content). The manifest-relative path is also the key used by
+/// `tuxixi update --theme`. The order defines the theme cycling
+/// sequence (Ctrl+Shift+T).
 pub const BUILTIN_FILES: &[(&str, &str)] = &[
-    ("matrix.json", include_str!("../themes/matrix.json")),
-    ("alacritty-dark.json", include_str!("../themes/alacritty-dark.json")),
-    ("monokai.json", include_str!("../themes/monokai.json")),
-    ("dracula.json", include_str!("../themes/dracula.json")),
-    ("nord.json", include_str!("../themes/nord.json")),
-    ("gruvbox-dark.json", include_str!("../themes/gruvbox-dark.json")),
-    ("solarized-dark.json", include_str!("../themes/solarized-dark.json")),
-    ("one-dark.json", include_str!("../themes/one-dark.json")),
-    ("tokyo-night.json", include_str!("../themes/tokyo-night.json")),
-    ("catppuccin.json", include_str!("../themes/catppuccin.json")),
-    ("cyberpunk.json", include_str!("../themes/cyberpunk.json")),
-    ("classic-black-white.json", include_str!("../themes/classic-black-white.json")),
-    ("classic-white-black.json", include_str!("../themes/classic-white-black.json")),
-    ("solarized-light.json", include_str!("../themes/solarized-light.json")),
-    ("papercolor-light.json", include_str!("../themes/papercolor-light.json")),
-    ("gruvbox-light.json", include_str!("../themes/gruvbox-light.json")),
-    ("purple-haze.json", include_str!("../themes/purple-haze.json")),
-    ("ocean-breeze.json", include_str!("../themes/ocean-breeze.json")),
-    ("retro-amber.json", include_str!("../themes/retro-amber.json")),
-    ("tokyo-night-storm.json", include_str!("../themes/tokyo-night-storm.json")),
-    ("tokyo-night-day.json", include_str!("../themes/tokyo-night-day.json")),
-    ("rose-pine.json", include_str!("../themes/rose-pine.json")),
-    ("rose-pine-moon.json", include_str!("../themes/rose-pine-moon.json")),
-    ("everforest.json", include_str!("../themes/everforest.json")),
-    ("kanagawa.json", include_str!("../themes/kanagawa.json")),
-    ("night-owl.json", include_str!("../themes/night-owl.json")),
-    ("synthwave.json", include_str!("../themes/synthwave.json")),
-    ("github-dark.json", include_str!("../themes/github-dark.json")),
-    ("vscode-dark-plus.json", include_str!("../themes/vscode-dark-plus.json")),
-    ("flexoki-dark.json", include_str!("../themes/flexoki-dark.json")),
+    ("upstream/Atom-One-Dark.itermcolors", include_str!("../themes/upstream/Atom-One-Dark.itermcolors")),
+    ("upstream/Atom-One-Light.itermcolors", include_str!("../themes/upstream/Atom-One-Light.itermcolors")),
+    ("upstream/Ayu-Mirage.itermcolors", include_str!("../themes/upstream/Ayu-Mirage.itermcolors")),
+    ("upstream/Ayu.itermcolors", include_str!("../themes/upstream/Ayu.itermcolors")),
+    ("upstream/Catppuccin-Frappe.itermcolors", include_str!("../themes/upstream/Catppuccin-Frappe.itermcolors")),
+    ("upstream/Catppuccin-Latte.itermcolors", include_str!("../themes/upstream/Catppuccin-Latte.itermcolors")),
+    ("upstream/Catppuccin-Macchiato.itermcolors", include_str!("../themes/upstream/Catppuccin-Macchiato.itermcolors")),
+    ("upstream/Catppuccin-Mocha.itermcolors", include_str!("../themes/upstream/Catppuccin-Mocha.itermcolors")),
+    ("upstream/Cyberpunk.itermcolors", include_str!("../themes/upstream/Cyberpunk.itermcolors")),
+    ("upstream/Dracula.itermcolors", include_str!("../themes/upstream/Dracula.itermcolors")),
+    ("upstream/Everforest-Dark-Med.itermcolors", include_str!("../themes/upstream/Everforest-Dark-Med.itermcolors")),
+    ("upstream/Flexoki-Dark.itermcolors", include_str!("../themes/upstream/Flexoki-Dark.itermcolors")),
+    ("upstream/Flexoki-Light.itermcolors", include_str!("../themes/upstream/Flexoki-Light.itermcolors")),
+    ("upstream/GitHub-Dark.itermcolors", include_str!("../themes/upstream/GitHub-Dark.itermcolors")),
+    ("upstream/Gruvbox-Dark.itermcolors", include_str!("../themes/upstream/Gruvbox-Dark.itermcolors")),
+    ("upstream/Gruvbox-Light.itermcolors", include_str!("../themes/upstream/Gruvbox-Light.itermcolors")),
+    ("upstream/Kanagawa-Wave.itermcolors", include_str!("../themes/upstream/Kanagawa-Wave.itermcolors")),
+    ("upstream/Monokai-Classic.itermcolors", include_str!("../themes/upstream/Monokai-Classic.itermcolors")),
+    ("upstream/Night-Owl.itermcolors", include_str!("../themes/upstream/Night-Owl.itermcolors")),
+    ("upstream/Nord.itermcolors", include_str!("../themes/upstream/Nord.itermcolors")),
+    ("upstream/One-Half-Dark.itermcolors", include_str!("../themes/upstream/One-Half-Dark.itermcolors")),
+    ("upstream/One-Half-Light.itermcolors", include_str!("../themes/upstream/One-Half-Light.itermcolors")),
+    ("upstream/Rose-Pine-Dawn.itermcolors", include_str!("../themes/upstream/Rose-Pine-Dawn.itermcolors")),
+    ("upstream/Rose-Pine-Moon.itermcolors", include_str!("../themes/upstream/Rose-Pine-Moon.itermcolors")),
+    ("upstream/Rose-Pine.itermcolors", include_str!("../themes/upstream/Rose-Pine.itermcolors")),
+    ("upstream/Synthwave.itermcolors", include_str!("../themes/upstream/Synthwave.itermcolors")),
+    ("upstream/TokyoNight-Day.itermcolors", include_str!("../themes/upstream/TokyoNight-Day.itermcolors")),
+    ("upstream/TokyoNight-Moon.itermcolors", include_str!("../themes/upstream/TokyoNight-Moon.itermcolors")),
+    ("upstream/TokyoNight-Storm.itermcolors", include_str!("../themes/upstream/TokyoNight-Storm.itermcolors")),
+    ("upstream/TokyoNight.itermcolors", include_str!("../themes/upstream/TokyoNight.itermcolors")),
+    ("upstream/iTerm2-Solarized-Dark.itermcolors", include_str!("../themes/upstream/iTerm2-Solarized-Dark.itermcolors")),
+    ("upstream/iTerm2-Solarized-Light.itermcolors", include_str!("../themes/upstream/iTerm2-Solarized-Light.itermcolors")),
 ];
 
 /// The embedded copy of `themes/manifest.json`: SHA-256 of every built-in
@@ -67,9 +65,17 @@ pub const BLUR_MODES: &[&str] = &["off", "static", "smoky"];
 pub const TRANSLUCENT_ALPHA: f64 = 0.52;
 pub const SMOKY_ALPHA: f64 = 0.87;
 
+/// Readable fallback used in glass mode only when a theme foreground
+/// cannot be parsed at all.
 pub const GLASS_FALLBACK_FG: &str = "#F8FAFC";
 
-/// One color theme: background / foreground / cursor as `#RRGGBB`.
+/// How deep the user themes directory is scanned (so a whole cloned
+/// theme repository works; `~/.config/tuxixi/themes/<repo>/<file>`).
+pub const MAX_SCAN_DEPTH: usize = 4;
+
+/// One color theme: background / foreground / cursor as `#RRGGBB`,
+/// plus an optional 16-color ANSI palette (same order VTE expects:
+/// 0-7 normal black..white, 8-15 bright black..white).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Theme {
     pub name: String,
@@ -77,6 +83,8 @@ pub struct Theme {
     pub foreground: String,
     #[serde(default)]
     pub cursor: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub palette: Vec<String>,
 }
 
 fn validate_hex_field(field: &str, value: &str, theme: &str) -> Result<(), String> {
@@ -100,9 +108,19 @@ impl Theme {
         if theme.cursor.trim().is_empty() {
             theme.cursor = theme.foreground.clone();
         }
+        if theme.palette.len() > 16 {
+            return Err(format!(
+                "theme '{}': palette has {} entries, at most 16 are supported",
+                theme.name,
+                theme.palette.len()
+            ));
+        }
         validate_hex_field("background", &theme.background, &theme.name)?;
         validate_hex_field("foreground", &theme.foreground, &theme.name)?;
         validate_hex_field("cursor", &theme.cursor, &theme.name)?;
+        for (i, color) in theme.palette.iter().enumerate() {
+            validate_hex_field(&format!("palette[{i}]"), color, &theme.name)?;
+        }
         Ok(theme)
     }
 }
@@ -173,35 +191,29 @@ impl Registry {
         })
     }
 
-    /// Only the embedded built-in themes (no filesystem access).
+    /// Only the embedded built-in themes (no filesystem access). Every
+    /// embedded file is the authentic upstream file, parsed with the
+    /// same parser that handles user files.
     pub fn builtin() -> Self {
         let mut themes = Vec::new();
-        for (file, json) in BUILTIN_FILES {
-            let theme = Theme::from_json(json).unwrap_or_else(|e| {
-                panic!("corrupt embedded theme {file}: {e}");
-            });
+        for (file, content) in BUILTIN_FILES {
+            let theme = theme_from_embedded(file, content);
             themes.push(theme);
         }
         Self { themes }
     }
 
-    /// Built-ins + user themes from `dir` (when it exists and is
-    /// readable). Invalid JSON files are skipped with a warning on
-    /// stderr; valid files override built-ins with the same name.
+    /// Built-ins + user themes from `dir` (scanned recursively). Invalid
+    /// files are skipped with a warning on stderr; valid files override
+    /// built-ins with the same name.
     pub fn load(user_dir: Option<&Path>) -> Self {
         let mut reg = Self::builtin();
         let Some(dir) = user_dir else { return reg };
-        let Ok(entries) = std::fs::read_dir(dir) else {
+        if !dir.is_dir() {
             return reg;
-        };
-        let mut files: Vec<PathBuf> = entries
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| p.extension().map(|x| x == "json").unwrap_or(false))
-            .collect();
-        files.sort();
+        }
         let mut seen_user_names: std::collections::HashSet<String> = Default::default();
-        for path in files {
+        for path in collect_theme_files(dir, 0) {
             let file_name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
@@ -210,7 +222,7 @@ impl Registry {
                 eprintln!("Warning: could not read theme file {file_name}");
                 continue;
             };
-            match Theme::from_json(&content) {
+            match theme_formats::theme_from_file(&path, &content) {
                 Ok(theme) => {
                     // First user file with a given name wins; later ones
                     // (and built-in overrides) are ignored for that name.
@@ -258,6 +270,49 @@ impl Registry {
     }
 }
 
+/// Parse one embedded built-in file. Panics on corruption: a broken
+/// embedded theme is a programming error caught by the test suite.
+fn theme_from_embedded(file: &str, content: &str) -> Theme {
+    let path = Path::new(file);
+    theme_formats::theme_from_file(path, content)
+        .unwrap_or_else(|e| panic!("corrupt embedded theme {file}: {e}"))
+}
+
+/// Recursively collect files with a supported theme extension, sorted
+/// for deterministic override order. Hidden entries and `.git` are
+/// skipped; the depth is capped at [`MAX_SCAN_DEPTH`].
+fn collect_theme_files(dir: &Path, depth: usize) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if depth > MAX_SCAN_DEPTH {
+        return out;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .collect();
+    paths.sort();
+    for path in paths {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if name.starts_with('.') {
+            continue;
+        }
+        if path.is_dir() {
+            out.extend(collect_theme_files(&path, depth + 1));
+        } else if theme_formats::SUPPORTED_EXTENSIONS.iter().any(|ext| {
+            name.to_ascii_lowercase().ends_with(&format!(".{ext}"))
+        }) {
+            out.push(path);
+        }
+    }
+    out
+}
+
 /// The user themes directory: `$XDG_CONFIG_HOME/tuxixi/themes` (or
 /// `~/.config/tuxixi/themes`).
 pub fn user_themes_dir() -> PathBuf {
@@ -271,7 +326,7 @@ pub fn user_themes_dir() -> PathBuf {
 }
 
 /// (background, foreground) hex colors for a theme name. Unknown names
-/// fall back to the default theme (Tokyo Night).
+/// fall back to the default theme (TokyoNight).
 pub fn theme_colors(theme_name: &str) -> (String, String) {
     let reg = Registry::global();
     let theme = reg.get(theme_name).unwrap_or_else(|| reg.fallback());
@@ -279,18 +334,19 @@ pub fn theme_colors(theme_name: &str) -> (String, String) {
 }
 
 /// Port of `get_colors`: when glass mode is on (transparent, or static /
-/// smoky blur) the terminal itself becomes fully transparent and falls
-/// back to a light foreground; otherwise the theme colors are used.
+/// smoky blur) the terminal background becomes fully transparent but the
+/// THEME foreground is kept, so switching themes stays visible in every
+/// mode. Without glass the theme's background + foreground are used.
 pub fn get_colors(theme_name: &str, transparent: bool, blur_mode: &str) -> (Rgba, Rgba) {
     let glass = transparent || blur_mode == "static" || blur_mode == "smoky";
+    let reg = Registry::global();
+    let theme = reg.get(theme_name).unwrap_or_else(|| reg.fallback());
     if glass {
-        (
-            Rgba::black_transparent(),
-            Rgba::opaque(GLASS_FALLBACK_FG),
-        )
+        let fg = Rgba::parse_hex(&theme.foreground)
+            .unwrap_or_else(|| Rgba::opaque(GLASS_FALLBACK_FG));
+        (Rgba::black_transparent(), fg)
     } else {
-        let (bg_hex, fg_hex) = theme_colors(theme_name);
-        (Rgba::opaque(&bg_hex), Rgba::opaque(&fg_hex))
+        (Rgba::opaque(&theme.background), Rgba::opaque(&theme.foreground))
     }
 }
 
@@ -304,9 +360,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builtin_registry_has_30_unique_valid_themes() {
+    fn builtin_registry_has_32_unique_valid_themes() {
         let reg = Registry::builtin();
-        assert_eq!(reg.len(), 30);
+        assert_eq!(reg.len(), 32, "32 vendored upstream themes expected");
         let names = reg.names();
         for name in &names {
             assert!(reg.get(name).is_some());
@@ -316,13 +372,11 @@ mod tests {
     }
 
     #[test]
-    fn embedded_files_and_builtin_registry_are_in_sync() {
-        for (file, json) in BUILTIN_FILES {
-            let theme = Theme::from_json(json)
-                .unwrap_or_else(|e| panic!("embedded theme {file} is invalid: {e}"));
-            // The file name (slug) must not drift away from the theme name.
-            assert!(file.ends_with(".json"), "bad file name: {file}");
-            assert!(!theme.name.is_empty());
+    fn every_builtin_has_a_full_16_color_palette() {
+        let reg = Registry::builtin();
+        for name in reg.names() {
+            let t = reg.get(&name).unwrap();
+            assert_eq!(t.palette.len(), 16, "{name} palette incomplete");
         }
     }
 
@@ -356,31 +410,45 @@ mod tests {
     }
 
     #[test]
-    fn tokyo_night_is_the_default_and_comes_from_its_file() {
-        assert_eq!(DEFAULT_THEME, "Tokyo Night");
+    fn tokyo_night_is_the_default_and_comes_from_the_upstream_file() {
+        assert_eq!(DEFAULT_THEME, "TokyoNight");
         let reg = Registry::builtin();
-        let theme = reg.get(DEFAULT_THEME).expect("Tokyo Night must exist");
+        let theme = reg.get(DEFAULT_THEME).expect("TokyoNight must exist");
         assert_eq!(theme.background, "#1A1B26");
-        assert_eq!(theme.foreground, "#A9B1D6");
-        assert_eq!(theme.cursor, "#A9B1D6");
+        assert_eq!(theme.foreground, "#C0CAF5");
+        assert_eq!(theme.cursor, "#C0CAF5");
+        assert_eq!(theme.palette[1], "#F7768E");
     }
 
     #[test]
     fn unknown_theme_falls_back_to_tokyo_night() {
         let reg = Registry::builtin();
-        assert_eq!(reg.fallback().name, "Tokyo Night");
+        assert_eq!(reg.fallback().name, "TokyoNight");
         let (bg, fg) = theme_colors("Nope");
         assert_eq!(bg, "#1A1B26");
-        assert_eq!(fg, "#A9B1D6");
+        assert_eq!(fg, "#C0CAF5");
     }
 
     #[test]
-    fn theme_json_parse_accepts_missing_cursor() {
+    fn theme_json_parse_accepts_missing_cursor_and_palette() {
         let theme = Theme::from_json(
             r##"{"name": "X", "background": "#000000", "foreground": "#FFFFFF"}"##,
         )
         .unwrap();
         assert_eq!(theme.cursor, "#FFFFFF");
+        assert!(theme.palette.is_empty());
+    }
+
+    #[test]
+    fn theme_json_parse_accepts_a_valid_palette() {
+        let theme = Theme::from_json(
+            r##"{"name": "P", "background": "#000000", "foreground": "#FFFFFF",
+                 "palette": ["#111111","#222222","#333333","#444444","#555555","#666666","#777777","#888888",
+                              "#999999","#AAAAAA","#BBBBBB","#CCCCCC","#DDDDDD","#EEEEEE","#FFFFFF","#0F0F0F"]}"##,
+        )
+        .unwrap();
+        assert_eq!(theme.palette.len(), 16);
+        assert_eq!(theme.palette[15], "#0F0F0F");
     }
 
     #[test]
@@ -397,6 +465,16 @@ mod tests {
         .is_err());
         assert!(Theme::from_json(
             r##"{"name": "BadCursor", "background": "#000000", "foreground": "#FFFFFF", "cursor": "#ZZZZZZ"}"##
+        )
+        .is_err());
+        assert!(Theme::from_json(
+            r##"{"name": "BadPalette", "background": "#000000", "foreground": "#FFFFFF", "palette": ["#0000GG"]}"##
+        )
+        .is_err());
+        assert!(Theme::from_json(
+            r##"{"name": "LongPalette", "background": "#000000", "foreground": "#FFFFFF",
+                 "palette": ["#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000",
+                              "#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000"]}"##
         )
         .is_err());
     }
@@ -417,37 +495,63 @@ mod tests {
     #[test]
     fn user_theme_overrides_builtin_of_the_same_name() {
         let dir = temp_theme_dir("override");
-        let path = dir.join("dracula.json");
+        // Same file stem as the built-in -> same display name -> override.
         std::fs::write(
-            &path,
+            dir.join("Dracula.json"),
             r##"{"name": "Dracula", "background": "#123456", "foreground": "#654321"}"##,
         )
         .unwrap();
 
         let reg = Registry::load(Some(&dir));
-        assert_eq!(reg.len(), 30, "override must not add a new slot");
+        assert_eq!(reg.len(), 32, "override must not add a new slot");
         let dracula = reg.get("Dracula").unwrap();
         assert_eq!(dracula.background, "#123456");
         assert_eq!(dracula.foreground, "#654321");
-        // Built-in order keeps Dracula in its original slot.
-        assert_eq!(reg.names()[3], "Dracula");
+        assert!(dracula.palette.is_empty(), "the user file has no palette");
         std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
-    fn user_theme_with_new_name_is_appended() {
-        let dir = temp_theme_dir("append");
+    fn user_themes_are_found_recursively_and_appended() {
+        let dir = temp_theme_dir("recursive");
+        let repo = dir.join("some-theme-repo/themes");
+        std::fs::create_dir_all(&repo).unwrap();
         std::fs::write(
-            dir.join("my-theme.json"),
-            r##"{"name": "My Theme", "background": "#010203", "foreground": "#040506"}"##,
+            repo.join("my-theme.toml"),
+            "[colors.primary]\nbackground = \"#010203\"\nforeground = \"#040506\"\n",
         )
         .unwrap();
+        // .git directories must be skipped, not parsed.
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::write(dir.join(".git/hooks.toml"), "junk").unwrap();
 
         let reg = Registry::load(Some(&dir));
-        assert_eq!(reg.len(), 31);
-        let names = reg.names();
-        assert_eq!(names.last().unwrap(), "My Theme");
-        assert_eq!(reg.get("My Theme").unwrap().background, "#010203");
+        assert_eq!(reg.len(), 33, "one appended user theme");
+        let mine = reg.get("My Theme").unwrap();
+        assert_eq!(mine.background, "#010203");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn first_user_file_wins_on_duplicate_names() {
+        let dir = temp_theme_dir("dup");
+        // Both files share the stem "Dupe" (the display name source), so
+        // the alphabetically first one must win.
+        std::fs::write(
+            dir.join("Dupe.json"),
+            r##"{"name": "Dupe", "background": "#000001", "foreground": "#FFFFFF"}"##,
+        )
+        .unwrap();
+        let sub = dir.join("z-sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(
+            sub.join("Dupe.json"),
+            r##"{"name": "Dupe", "background": "#000002", "foreground": "#FFFFFF"}"##,
+        )
+        .unwrap();
+        let reg = Registry::load(Some(&dir));
+        assert_eq!(reg.len(), 33);
+        assert_eq!(reg.get("Dupe").unwrap().background, "#000001");
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -460,6 +564,7 @@ mod tests {
             r##"{"name": "BadColor", "background": "red", "foreground": "#FFFFFF"}"##,
         )
         .unwrap();
+        std::fs::write(dir.join("junk.txt"), "not a theme").unwrap();
         std::fs::write(
             dir.join("good.json"),
             r##"{"name": "Good", "background": "#000000", "foreground": "#FFFFFF"}"##,
@@ -467,7 +572,7 @@ mod tests {
         .unwrap();
 
         let reg = Registry::load(Some(&dir));
-        assert_eq!(reg.len(), 31);
+        assert_eq!(reg.len(), 33);
         assert!(reg.get("Good").is_some());
         assert!(reg.get("BadColor").is_none());
         std::fs::remove_dir_all(dir).ok();
@@ -476,54 +581,35 @@ mod tests {
     #[test]
     fn missing_user_dir_means_builtins_only() {
         let reg = Registry::load(Some(Path::new("/nonexistent/tuxixi-themes-xyz")));
-        assert_eq!(reg.len(), 30);
-    }
-
-    #[test]
-    fn first_user_file_wins_on_duplicate_names() {
-        let dir = temp_theme_dir("dup");
-        std::fs::write(
-            dir.join("aaa.json"),
-            r##"{"name": "Dupe", "background": "#000001", "foreground": "#FFFFFF"}"##,
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("bbb.json"),
-            r##"{"name": "Dupe", "background": "#000002", "foreground": "#FFFFFF"}"##,
-        )
-        .unwrap();
-        let reg = Registry::load(Some(&dir));
-        assert_eq!(reg.len(), 31);
-        assert_eq!(reg.get("Dupe").unwrap().background, "#000001");
-        std::fs::remove_dir_all(dir).ok();
+        assert_eq!(reg.len(), 32);
     }
 
     #[test]
     fn theme_colors_returns_builtin_colors() {
-        let (bg, fg) = theme_colors("Matrix");
-        assert_eq!(bg, "#001100");
-        assert_eq!(fg, "#00FF00");
+        let (bg, fg) = theme_colors("Dracula");
+        assert_eq!(bg, "#282A36");
+        assert_eq!(fg, "#F8F8F2");
         let (bg, fg) = theme_colors(DEFAULT_THEME);
         assert_eq!(bg, "#1A1B26");
-        assert_eq!(fg, "#A9B1D6");
+        assert_eq!(fg, "#C0CAF5");
     }
 
     #[test]
     fn get_colors_normal_mode_uses_theme() {
-        let (bg, fg) = get_colors("Matrix", false, "off");
-        assert_eq!(bg, Rgba::parse_hex("#001100").unwrap());
-        assert_eq!(fg, Rgba::parse_hex("#00FF00").unwrap());
+        let (bg, fg) = get_colors("Dracula", false, "off");
+        assert_eq!(bg, Rgba::parse_hex("#282A36").unwrap());
+        assert_eq!(fg, Rgba::parse_hex("#F8F8F2").unwrap());
         assert_eq!(bg.a, 1.0);
         assert_eq!(fg.a, 1.0);
     }
 
     #[test]
-    fn get_colors_glass_mode_is_transparent_black_with_light_fg() {
+    fn get_colors_glass_mode_keeps_the_theme_foreground() {
         for transparent in [false, true] {
             for mode in ["static", "smoky"] {
                 let (bg, fg) = get_colors("Dracula", transparent, mode);
                 assert_eq!(bg, Rgba::new(0.0, 0.0, 0.0, 0.0));
-                assert_eq!(fg, Rgba::parse_hex("#F8FAFC").unwrap());
+                assert_eq!(fg, Rgba::parse_hex("#F8F8F2").unwrap());
             }
         }
     }

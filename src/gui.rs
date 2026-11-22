@@ -216,6 +216,18 @@ impl TuxixiWindow {
         // Terminal behaviors: shortcuts, shell session, title tracking.
         setup_key_controller(&vte, this.clone());
         setup_session(&vte);
+
+        // A new tab must open with the CURRENTLY selected theme and font
+        // immediately. Previously colors/fonts were only applied by the
+        // settings-change listener, so a tab created after startup (+
+        // button / Ctrl+Shift+Enter) came up with VTE's default dark
+        // colors until the next theme/font change - the reported "yeni
+        // sekme seçtigim temayla açılamdı" bug.
+        {
+            let s = this.borrow().settings.borrow().get().clone();
+            Self::apply_font_to(&vte, &s);
+            Self::apply_vte_colors(&vte, &theme::terminal_colors(&s.theme, s.transparent, s.blur_mode.as_str()));
+        }
         {
             let this = this.clone();
             vte.connect_window_title_changed(move |_| {
@@ -359,11 +371,17 @@ impl TuxixiWindow {
     /// Called on startup and on every settings change, so Ctrl+Shift+=
     /// and Ctrl+Shift+- resize the terminals immediately.
     fn apply_fonts(&self, s: &Settings) {
+        for tab in &self.tabs {
+            Self::apply_font_to(&tab.vte, s);
+        }
+    }
+
+    /// Apply the configured font to a single terminal (used by
+    /// `apply_fonts` and when a new tab is created).
+    fn apply_font_to(vte: &VteTerminal, s: &Settings) {
         let desc =
             gtk4::pango::FontDescription::from_string(&format!("{} {}", s.font, s.font_size));
-        for tab in &self.tabs {
-            tab.vte.set_font(Some(&desc));
-        }
+        vte.set_font(Some(&desc));
     }
 
     /// Apply the theme colors DIRECTLY to every VTE terminal (not just
@@ -375,29 +393,26 @@ impl TuxixiWindow {
     /// and switching themes (Ctrl+Shift+T / `tuxixi theme set`) is
     /// visible immediately in every mode.
     fn apply_colors(&self, s: &Settings) {
-        let reg = theme::Registry::global();
-        let theme = reg
-            .get(&s.theme)
-            .unwrap_or_else(|| reg.fallback())
-            .clone();
-        let (bg, fg) = theme::get_colors(&s.theme, s.transparent, s.blur_mode.as_str());
+        let colors = theme::terminal_colors(&s.theme, s.transparent, s.blur_mode.as_str());
+        for tab in &self.tabs {
+            Self::apply_vte_colors(&tab.vte, &colors);
+        }
+    }
+
+    /// Convert the resolved [`theme::TerminalColors`] to gdk values and
+    /// paint one VTE terminal: foreground, background, cursor and the
+    /// full 16-color ANSI palette.
+    fn apply_vte_colors(vte: &VteTerminal, colors: &theme::TerminalColors) {
         let to_gdk = |c: theme::Rgba| {
             gdk::RGBA::new(c.r as f32, c.g as f32, c.b as f32, c.a as f32)
         };
-        let gdk_bg = to_gdk(bg);
-        let gdk_fg = to_gdk(fg);
-        let gdk_cursor = to_gdk(theme::Rgba::opaque(&theme.cursor));
-        let palette: Vec<gdk::RGBA> = theme
-            .palette
-            .iter()
-            .filter_map(|hex| theme::Rgba::parse_hex(hex).map(to_gdk))
-            .collect();
+        let gdk_bg = to_gdk(colors.background);
+        let gdk_fg = to_gdk(colors.foreground);
+        let gdk_cursor = to_gdk(colors.cursor);
+        let palette: Vec<gdk::RGBA> = colors.palette.iter().map(|c| to_gdk(*c)).collect();
         let palette_refs: Vec<&gdk::RGBA> = palette.iter().collect();
-        for tab in &self.tabs {
-            tab.vte
-                .set_colors(Some(&gdk_fg), Some(&gdk_bg), &palette_refs);
-            tab.vte.set_color_cursor(Some(&gdk_cursor));
-        }
+        vte.set_colors(Some(&gdk_fg), Some(&gdk_bg), &palette_refs);
+        vte.set_color_cursor(Some(&gdk_cursor));
     }
 }
 

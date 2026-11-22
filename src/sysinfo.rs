@@ -239,7 +239,7 @@ pub fn format_version() -> String {
 
 pub fn format_welcome() -> String {
     format!(
-        "{BOLD}{PURPLE}◆ TUXIXI Terminal{RESET} {SLATE}v{VERSION}{RESET} {SLATE}— Type{RESET} {LIME}tuxixi --help{RESET} {SLATE}to view available commands and shortcuts.{RESET}\n\n",
+        "{BOLD}{PURPLE}◆ TUXIXI Terminal{RESET} {SLATE}v{VERSION}{RESET} {RED}(rust){RESET} {SLATE}— Type{RESET} {LIME}tuxixi --help{RESET} {SLATE}to view available commands and shortcuts.{RESET}\n\n",
         VERSION = crate::cli::VERSION
     )
 }
@@ -391,6 +391,18 @@ mod tests {
         let w = format_welcome();
         assert!(w.contains("tuxixi --help"));
         assert!(w.ends_with("\n\n"));
+    }
+
+    #[test]
+    fn welcome_shows_the_rust_tag_in_red() {
+        let w = format_welcome();
+        assert!(w.contains("(rust)"), "welcome must advertise the Rust rewrite");
+        // The tag is wrapped in the red ANSI color, not plain text.
+        let tagged = format!("{RED}(rust){RESET}");
+        assert!(w.contains(&tagged), "the (rust) tag must be red");
+        // It sits between the version and the dash.
+        let marker = format!("v{}{RESET} {RED}(rust){RESET}", crate::cli::VERSION);
+        assert!(w.contains(&marker), "tag must come right after the version");
     }
 
     #[test]

@@ -355,6 +355,36 @@ pub fn is_glass(transparent: bool, blur_mode: &str) -> bool {
     transparent || blur_mode == "static" || blur_mode == "smoky"
 }
 
+/// Fully resolved colors for one VTE terminal: background, foreground,
+/// cursor and the 16-color ANSI palette. The GUI converts these to
+/// `gdk::RGBA` values; being plain [`Rgba`] the whole pipeline stays
+/// testable without GTK.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TerminalColors {
+    pub background: Rgba,
+    pub foreground: Rgba,
+    pub cursor: Rgba,
+    pub palette: Vec<Rgba>,
+}
+
+/// Resolve every color a terminal needs for the given theme and glass
+/// mode. Unknown theme names fall back to the default theme (TokyoNight)
+/// exactly like [`get_colors`]. This is the single source of truth used
+/// by the GUI both at startup, when the user switches the theme and —
+/// critically — when a NEW tab is created, so every tab always opens
+/// with the currently selected theme.
+pub fn terminal_colors(theme_name: &str, transparent: bool, blur_mode: &str) -> TerminalColors {
+    let reg = Registry::global();
+    let theme = reg.get(theme_name).unwrap_or_else(|| reg.fallback());
+    let (background, foreground) = get_colors(theme_name, transparent, blur_mode);
+    TerminalColors {
+        background,
+        foreground,
+        cursor: Rgba::opaque(&theme.cursor),
+        palette: theme.palette.iter().filter_map(|c| Rgba::parse_hex(c)).collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -635,5 +665,62 @@ mod tests {
         assert_eq!(BLUR_MODES, &["off", "static", "smoky"]);
         assert!((TRANSLUCENT_ALPHA - 0.52).abs() < f64::EPSILON);
         assert!((SMOKY_ALPHA - 0.87).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn terminal_colors_resolve_every_builtin_theme_completely() {
+        let reg = Registry::builtin();
+        for name in reg.names() {
+            let t = reg.get(&name).unwrap();
+            let c = terminal_colors(&name, false, "off");
+            assert_eq!(c.background, Rgba::opaque(&t.background), "{name} bg");
+            assert_eq!(c.foreground, Rgba::opaque(&t.foreground), "{name} fg");
+            assert_eq!(c.cursor, Rgba::opaque(&t.cursor), "{name} cursor");
+            assert_eq!(
+                c.palette.len(),
+                t.palette.len(),
+                "{name} palette length must survive resolution"
+            );
+            for (resolved, hex) in c.palette.iter().zip(t.palette.iter()) {
+                assert_eq!(resolved, &Rgba::opaque(hex), "{name} palette entry {hex}");
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_colors_unknown_theme_falls_back_to_tokyo_night() {
+        let c = terminal_colors("This-Theme-Does-Not-Exist", false, "off");
+        assert_eq!(c.background, Rgba::parse_hex("#1A1B26").unwrap());
+        assert_eq!(c.foreground, Rgba::parse_hex("#C0CAF5").unwrap());
+    }
+
+    #[test]
+    fn terminal_colors_normal_mode_is_opaque() {
+        let c = terminal_colors("Dracula", false, "off");
+        assert_eq!(c.background.a, 1.0);
+        assert_eq!(c.foreground.a, 1.0);
+        assert_eq!(c.cursor.a, 1.0);
+        for entry in &c.palette {
+            assert_eq!(entry.a, 1.0, "palette entries must be opaque");
+        }
+    }
+
+    #[test]
+    fn terminal_colors_glass_mode_is_transparent_but_keeps_theme_fg() {
+        for transparent in [false, true] {
+            for mode in ["static", "smoky"] {
+                let c = terminal_colors("Dracula", transparent, mode);
+                assert_eq!(c.background, Rgba::new(0.0, 0.0, 0.0, 0.0));
+                assert_eq!(c.foreground, Rgba::parse_hex("#F8F8F2").unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_colors_differ_between_themes_so_switching_is_visible() {
+        let a = terminal_colors("Dracula", false, "off");
+        let b = terminal_colors("Nord", false, "off");
+        assert_ne!(a.background, b.background, "themes must paint different backgrounds");
+        assert_eq!(a.palette.len(), b.palette.len());
     }
 }

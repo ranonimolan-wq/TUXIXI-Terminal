@@ -118,7 +118,7 @@ fn installed_binary_responds_to_version() {
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("TUXIXI Terminal"));
-    assert!(text.contains("v2.1.0"));
+    assert!(text.contains(&format!("v{}", tuxixi::cli::VERSION)));
 }
 
 #[test]

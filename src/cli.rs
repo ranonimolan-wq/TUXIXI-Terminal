@@ -186,7 +186,7 @@ mod tests {
         let out = dispatch(&["--version".to_string()]);
         assert_eq!(out.exit_code, 0);
         assert!(out.stdout.contains("TUXIXI Terminal"));
-        assert!(out.stdout.contains("v2.1.0"), "stdout: {}", out.stdout);
+        assert!(out.stdout.contains(&format!("v{VERSION}")), "stdout: {}", out.stdout);
         assert!(out.stdout.ends_with('\n'));
     }
 

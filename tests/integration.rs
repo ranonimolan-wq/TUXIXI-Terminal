@@ -82,7 +82,7 @@ fn settings_survive_reload_with_full_content() {
     let mut s = Settings::default();
     s.font = "JetBrains Mono".into();
     s.font_size = 19;
-    s.theme = "Retro Amber".into();
+    s.theme = "Dracula".into();
     s.transparent = true;
     s.blur_mode = BlurMode::Smoky;
     mgr.set(s.clone());
@@ -93,11 +93,12 @@ fn settings_survive_reload_with_full_content() {
 }
 
 #[test]
-fn theme_cycle_covers_all_30_builtin_themes() {
+fn theme_cycle_covers_every_registry_theme() {
     let dir = tempdir("cycleall");
     let path = dir.join("config.json");
     let mut mgr = SettingsManager::load(&path);
-    let count = Registry::builtin().len();
+    // cycle_theme walks the global registry (built-ins + user themes).
+    let count = Registry::global().len();
     let mut seen = Vec::new();
     for _ in 0..count {
         mgr.cycle_theme();

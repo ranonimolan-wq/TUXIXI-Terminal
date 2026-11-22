@@ -153,9 +153,10 @@ mod tests {
 
     #[test]
     fn normal_mode_uses_theme_colors() {
-        let css = build_css("Matrix", false, BlurMode::Off);
-        assert!(css.contains("background-color: #001100;"));
-        assert!(css.contains("alpha(#00FF00, 0.65)"));
+        // Dracula is a vendored built-in: bg #282A36, fg #F8F8F2.
+        let css = build_css("Dracula", false, BlurMode::Off);
+        assert!(css.contains("background-color: #282A36;"));
+        assert!(css.contains("alpha(#F8F8F2, 0.65)"));
     }
 
     #[test]

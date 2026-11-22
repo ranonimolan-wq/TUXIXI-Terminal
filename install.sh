@@ -47,5 +47,10 @@ case ":$PATH:" in
     *) echo "note: add TUXIXI to your PATH:  export PATH=\"$BIN_DIR:\$PATH\"" ;;
 esac
 
-"$BIN_DIR/tuxixi" --version
+if ! "$BIN_DIR/tuxixi" --version 2>/dev/null; then
+    echo "note: installed, but the binary could not run yet."
+    echo "      TUXIXI needs GTK4 and VTE 3.91 at runtime, e.g.:"
+    echo "      Debian/Ubuntu: sudo apt install libgtk-4-1 libvte-2.91-gtk4-1"
+    echo "      Arch: sudo pacman -S gtk4 vte4   Fedora: sudo dnf install gtk4 vte291-gtk4"
+fi
 echo "Installed to $BIN_DIR/tuxixi"

@@ -35,6 +35,11 @@ pub fn paint(
         ),
     );
 
+    // Test-oracle path: a local snapshot is fine here (the GUI render
+    // path reuses a persistent buffer instead).
+    let mut grid = Vec::new();
+    term.copy_visible(offset, &mut grid);
+
     let cw = face.metrics.cell_width.max(1) as usize;
     let lh = face.metrics.line_height.max(1) as usize;
 
@@ -48,15 +53,12 @@ pub fn paint(
         if py + lh > height {
             break;
         }
-        let line = term.visible_row(offset, y as u16);
         for x in 0..cols {
             let px = x * cw;
             if px + cw > width {
                 break;
             }
-            let cell: Cell = line
-                .and_then(|l| l.get(x).copied())
-                .unwrap_or_else(Cell::blank);
+            let cell: Cell = grid.get(y * cols + x).copied().unwrap_or_else(Cell::blank);
             if cell.flags & WIDE_SPACER != 0 {
                 continue; // second half of a wide glyph
             }

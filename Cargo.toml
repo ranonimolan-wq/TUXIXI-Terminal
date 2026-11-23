@@ -18,7 +18,7 @@ gui = [
     "dep:glutin",
     "dep:glutin-winit",
     "dep:glow",
-    "dep:ab_glyph",
+    "dep:freetype-rs",
     "dep:nix",
     "dep:arboard",
     "dep:x11-dl",
@@ -48,12 +48,17 @@ x11-dl = { version = "2", optional = true }
 # Window-handle introspection: the X11 window id for the glass blur
 # property (already in the tree via winit/glutin; direct dep for API).
 raw-window-handle = { version = "0.6", optional = true }
-# Font parsing + rasterization.
-ab_glyph = { version = "0.2", optional = true }
-# VT/ANSI escape-sequence parser (same parser family Alacritty uses;
-# the widget-free parser crate, not the GTK VTE binding). Pure Rust and
-# tiny, so it stays in the core library even for CLI-only builds.
-vte = "0.13"
+# Font parsing + rasterization: FreeType with hinting (the same
+# rasterizer stack mainstream terminals render with). Needs
+# libfreetype6-dev + pkg-config at BUILD time; the built binary links
+# libfreetype.so.6, which ships with every desktop distribution.
+freetype-rs = { version = "0.38", optional = true }
+# The terminal emulation engine from the Alacritty project. Replaces the
+# previous hand-written Perform implementation: battle-tested handling of
+# shell line-editor redraws, cursor-position (DSR/CPR) responses, bracketed
+# paste, wide characters and the full DEC/xterm private-mode surface.
+# (Brings its own `vte` 0.15 parser; the direct vte dependency is gone.)
+alacritty_terminal = "0.26"
 # Wide-character column measurement for the grid.
 unicode-width = "0.2"
 # PTY: openpty / fork / setsid / execvp / kill.

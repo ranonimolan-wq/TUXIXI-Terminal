@@ -66,10 +66,18 @@ pub fn merge_path(current_path: &str, bin_dir: &str) -> String {
 }
 
 /// Extra environment variables injected into every TUXIXI session.
+///
+/// `TERM`/`COLORTERM` are pinned here because a GUI session launched
+/// from a desktop file may inherit no (or an arbitrary) TERM value at
+/// all; shells and line editors key their whole redraw behavior off it.
+/// `xterm-256color` advertises every capability the emulation engine
+/// actually answers.
 pub fn session_env(bin_dir: &str) -> Vec<(String, String)> {
     vec![
         ("TUXIXI_SESSION".to_string(), "1".to_string()),
         ("TUXIXI_BIN_DIR".to_string(), bin_dir.to_string()),
+        ("TERM".to_string(), "xterm-256color".to_string()),
+        ("COLORTERM".to_string(), "truecolor".to_string()),
     ]
 }
 
@@ -160,5 +168,9 @@ mod tests {
                 "/home/u/.local/opt/tuxixi/bin".into()
             )
         );
+        // The child must always get a TERM it can rely on: a GUI
+        // session started from a desktop file may inherit none.
+        assert_eq!(env[2], ("TERM".into(), "xterm-256color".into()));
+        assert_eq!(env[3], ("COLORTERM".into(), "truecolor".into()));
     }
 }

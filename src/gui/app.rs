@@ -24,6 +24,9 @@ use winit::window::Window;
 
 use crate::font::{load_default_face, FontFace};
 use crate::gpu::{build_scene, clear_color, Atlas, GlassParams, GpuRenderer, SceneInputs};
+use alacritty_terminal::event::WindowSize;
+use alacritty_terminal::term::ClipboardType;
+use alacritty_terminal::vte::ansi::Rgb;
 
 use super::env::bin_dir;
 use super::gl::{panic_message, CreatedGl, GlApi, GlBackend, GlProfile};
@@ -35,7 +38,7 @@ use crate::render::{Palette, Selection};
 use crate::settings::{Settings, SettingsManager};
 use crate::shell;
 use crate::theme;
-use crate::vt::Terminal;
+use crate::vt::{indexed_color, Cell, Color, TermEvent, Terminal};
 
 /// Initial window size in pixels.
 const INITIAL_SIZE: (u32, u32) = (960, 600);
@@ -60,6 +63,9 @@ pub(crate) struct App {
     pub(crate) selection: Option<Selection>,
     pub(crate) select_anchor: Option<(u16, u16)>,
     pub(crate) mouse_pos: (i32, i32),
+    /// Reused visible-grid buffer for `Terminal::copy_visible`: owned
+    /// by the App so the per-frame render path stays allocation-free.
+    pub(crate) grid_buf: Vec<Cell>,
     pub(crate) proxy: EventLoopProxy<PtyEvent>,
     /// Long-lived clipboard provider. On X11, the clipboard is OWNED
     /// by the process: arboard serves the selection from a thread tied
@@ -288,10 +294,13 @@ impl App {
 
         // One scene build per repaint: the CPU walks the grid once and
         // produces quads; everything else happens on the GPU.
+        self.term
+            .copy_visible(self.scroll_offset, &mut self.grid_buf);
         let scene = build_scene(
             &self.term,
             self.scroll_offset,
             SceneInputs {
+                grid: &self.grid_buf,
                 palette: &self.palette,
                 face: &mut self.face,
                 atlas: &mut gl.atlas,
@@ -502,6 +511,82 @@ impl App {
             pairs.push(("PATH".to_string(), merged));
         }
         pairs
+    }
+
+    /// Answer the requests the emulation engine collected while parsing
+    /// child output: write query responses to the PTY and serve OSC 52
+    /// clipboard traffic. Without the cursor-position response (DSR/CPR)
+    /// line editors that query the terminal cannot know where the real
+    /// cursor is, which desynchronizes their redraw model.
+    pub(crate) fn answer_term_events(&mut self) {
+        let mut responses: Vec<Vec<u8>> = Vec::new();
+        for event in self.term.take_events() {
+            match event {
+                TermEvent::PtyWrite(bytes) => responses.push(bytes),
+                TermEvent::ClipboardStore(ty, text) => {
+                    // Only the main selection is served; secondary
+                    // selection requests are ignored.
+                    if matches!(ty, ClipboardType::Clipboard) {
+                        if let Some(clip) = self.clipboard.as_mut() {
+                            let _ = clip.set_text(&text);
+                        }
+                    }
+                }
+                TermEvent::ClipboardLoad(ty, fmt) => {
+                    // Only the main selection is served; anything else
+                    // would leak the selection buffer to the child.
+                    if matches!(ty, ClipboardType::Clipboard) {
+                        if let Some(clip) = self.clipboard.as_mut() {
+                            if let Ok(text) = clip.get_text() {
+                                responses.push(fmt(&text).into_bytes());
+                            }
+                        }
+                    }
+                }
+                TermEvent::ColorRequest(index, fmt) => {
+                    let rgb = self.resolve_term_color(index);
+                    responses.push(fmt(rgb).into_bytes());
+                }
+                TermEvent::TextAreaSizeRequest(fmt) => {
+                    let size = WindowSize {
+                        num_cols: self.term.cols,
+                        num_lines: self.term.rows,
+                        cell_width: self.face.metrics.cell_width.max(1) as u16,
+                        cell_height: self.face.metrics.line_height.max(1) as u16,
+                    };
+                    responses.push(fmt(size).into_bytes());
+                }
+            }
+        }
+        if !responses.is_empty() {
+            if let Some(pty) = &self.pty {
+                for bytes in responses {
+                    if std::env::var_os("TUXIXI_DEBUG_INPUT").is_some() {
+                        eprintln!("pty.write(response): {bytes:?}");
+                    }
+                    pty.write(&bytes);
+                }
+            }
+        }
+    }
+
+    /// Resolve one color-query index against the active theme. 0-255
+    /// follow the xterm palette (0-15 from the theme, 16-255 from the
+    /// standard cube); 256/257/258 are the default foreground, the
+    /// default background and the cursor color.
+    fn resolve_term_color(&self, index: usize) -> Rgb {
+        let [r, g, b] = match index {
+            256 => self.palette.foreground,
+            257 => self.palette.background,
+            258 => self.palette.cursor,
+            0..=15 => self.palette.ansi[index],
+            _ => match indexed_color(index.min(255) as u8) {
+                Color::Rgb(rgb) => rgb,
+                Color::Indexed(i) => self.palette.ansi[i as usize],
+                Color::Default => self.palette.foreground,
+            },
+        };
+        Rgb { r, g, b }
     }
 
     /// Feed the welcome banner (same `tuxixi --welcome` output as the

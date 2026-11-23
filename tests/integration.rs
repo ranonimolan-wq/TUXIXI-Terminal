@@ -81,8 +81,10 @@ fn vt_grid_renders_theme_foreground_characters() {
     // End-to-end: settings -> theme colors -> VT grid -> input bytes.
     let mut t = Terminal::new(20, 4);
     t.feed(b"TUXIXI \x1b[32mgreen\x1b[0m");
-    assert_eq!(t.cell(0, 0).unwrap().c, 'T');
-    assert_eq!(t.cell(7, 0).unwrap().fg, tuxixi::vt::Color::Indexed(2));
+    let mut grid = Vec::new();
+    t.copy_visible(0, &mut grid);
+    assert_eq!(grid[0].c, 'T');
+    assert_eq!(grid[7].fg, tuxixi::vt::Color::Indexed(2));
 
     // Typing "q" through the input encoder feeds the same grid.
     let bytes = input::encode(Key::Char('q'), Modifiers::default(), false).unwrap();

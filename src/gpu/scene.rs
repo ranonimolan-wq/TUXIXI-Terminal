@@ -17,6 +17,9 @@ use super::draw::{rgba01, GlassParams, GlyphDraw, RectDraw, Scene};
 /// Bundled into one descriptor so the builder keeps a small, stable
 /// signature (and gains fields without growing its parameter list).
 pub struct SceneInputs<'a> {
+    /// Visible grid snapshot (row-major, `cols * rows` cells) produced
+    /// by `Terminal::copy_visible` for the requested scroll offset.
+    pub grid: &'a [Cell],
     pub palette: &'a Palette,
     pub face: &'a mut FontFace,
     pub atlas: &'a mut Atlas,
@@ -38,6 +41,7 @@ pub struct SceneInputs<'a> {
 /// * the cursor is only drawn on the live screen (offset == 0).
 pub fn build_scene(term: &Terminal, offset: usize, inputs: SceneInputs<'_>) -> Scene {
     let SceneInputs {
+        grid,
         palette,
         face,
         atlas,
@@ -56,12 +60,9 @@ pub fn build_scene(term: &Terminal, offset: usize, inputs: SceneInputs<'_>) -> S
 
     for y in 0..rows {
         let py = y as f32 * lh;
-        let line = term.visible_row(offset, y as u16);
         for x in 0..cols {
             let px = x as f32 * cw;
-            let cell: Cell = line
-                .and_then(|l| l.get(x).copied())
-                .unwrap_or_else(Cell::blank);
+            let cell: Cell = grid.get(y * cols + x).copied().unwrap_or_else(Cell::blank);
             if cell.flags & WIDE_SPACER != 0 {
                 continue; // second half of a wide glyph
             }

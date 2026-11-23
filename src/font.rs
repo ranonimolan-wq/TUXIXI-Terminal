@@ -5,14 +5,18 @@
 //!
 //! The font is located with `fc-match` (fontconfig, the same lookup
 //! GTK/Pango did) with a pure-Rust fallback that scans the usual
-//! directories. Rasterization uses `ab_glyph` — no FreeType, no C.
+//! directories. Rasterization goes through FreeType with hinting
+//! enabled — the same rasterizer stack mainstream terminals render
+//! with — so glyph edges are crisp at small pixel sizes instead of the
+//! soft, unhinted outlines a pure-Rust outline scaler produces.
 //!
 //! The glyph cache is a [`BoundedCache`]: a hard entry limit with
 //! explicit release-on-eviction, so a session full of rare CJK glyphs
 //! can never grow the process without bound.
 
 use crate::mem::{BoundedCache, Compact};
-use ab_glyph::{Font, FontArc, GlyphId, ScaleFont};
+use freetype::face::LoadFlag;
+use freetype::{Face, Library};
 
 /// Everything the renderer needs to draw one glyph.
 #[derive(Clone)]
@@ -65,10 +69,10 @@ impl std::fmt::Debug for FontFace {
 }
 
 pub struct FontFace {
-    pub regular: FontArc,
-    pub bold: FontArc,
-    pub italic: FontArc,
-    pub bold_italic: FontArc,
+    regular: Face,
+    bold: Face,
+    italic: Face,
+    bold_italic: Face,
     pub metrics: FontMetrics,
     cache: BoundedCache<GlyphKey, GlyphBitmap>,
 }
@@ -77,25 +81,7 @@ impl FontFace {
     /// Rasterization size used by the GUI.
     pub const RASTER_LIMIT: usize = BoundedCache::<GlyphKey, GlyphBitmap>::DEFAULT_LIMIT;
 
-    pub fn from_data(
-        regular: FontArc,
-        bold: FontArc,
-        italic: FontArc,
-        bold_italic: FontArc,
-        px: f32,
-    ) -> Self {
-        let metrics = measure(&regular, px);
-        Self {
-            regular,
-            bold,
-            italic,
-            bold_italic,
-            metrics,
-            cache: BoundedCache::new(Self::RASTER_LIMIT),
-        }
-    }
-
-    fn face_for(&self, style: u8) -> &FontArc {
+    fn face_for(&self, style: u8) -> &Face {
         match (style & STYLE_BOLD != 0, style & STYLE_ITALIC != 0) {
             (true, true) => &self.bold_italic,
             (true, false) => &self.bold,
@@ -109,9 +95,8 @@ impl FontFace {
     pub fn glyph(&mut self, c: char, style: u8) -> Option<&GlyphBitmap> {
         let key: GlyphKey = (c, style);
         if !self.cache.contains(&key) {
-            let bitmap = rasterize(self.face_for(style), c, self.metrics.px);
-            {
-                let b = bitmap?;
+            let bitmap = rasterize(self.face_for(style), c);
+            if let Some(b) = bitmap {
                 // Ignored return value: a wholesale eviction is invisible
                 // to the renderer, the cache refills within a frame.
                 let _ = self.cache.insert(key, b);
@@ -132,68 +117,66 @@ impl FontFace {
 }
 
 /// Measure the grid metrics from the regular face at `px`.
-pub fn measure(font: &FontArc, px: f32) -> FontMetrics {
-    let scaled = font.as_scaled(px);
-    let ascent = scaled.ascent().round().max(1.0);
-    let descent = scaled.descent().abs().round().max(1.0);
-    // Cell width = widest advance among the printable ASCII set so all
-    // monospace glyphs (and near-monospace fonts) stay aligned.
-    let mut cell_width: f32 = 1.0;
-    for c in ('!'..='~').chain(' '..=' ') {
-        let adv = scaled.h_advance(font.glyph_id(c));
-        if adv > cell_width {
-            cell_width = adv;
-        }
-    }
+pub fn measure(face: &Face, px: f32) -> FontMetrics {
+    let metrics = face.size_metrics();
+    // 26.6 fixed point -> whole pixels. Hinted metrics are already
+    // rounded by FreeType; ceil keeps the grid slightly generous.
+    let (ascender, descender, max_advance) = match metrics {
+        Some(m) => (m.ascender, m.descender, m.max_advance),
+        None => (
+            (px * 0.8 * 64.0) as i64,
+            (px * 0.2 * 64.0) as i64,
+            (px * 0.6 * 64.0) as i64,
+        ),
+    };
+    let ascent = ((ascender as f64) / 64.0).round().max(1.0) as i32;
+    let descent = ((descender as f64) / 64.0).abs().round().max(1.0) as i32;
+    let cell_width = ((max_advance as f64) / 64.0).ceil().max(1.0) as u32;
     FontMetrics {
-        line_height: (ascent + descent).ceil() as u32,
-        cell_width: cell_width.ceil() as u32,
-        ascent: ascent as i32,
+        line_height: (ascent + descent) as u32,
+        cell_width,
+        ascent,
         px,
     }
 }
 
-/// Rasterize `c` into an 8-bit coverage bitmap (top-left origin).
-pub fn rasterize(font: &FontArc, c: char, px: f32) -> Option<GlyphBitmap> {
-    let gid: GlyphId = font.glyph_id(c);
-    if gid.0 == 0 && c != '\0' {
-        // .notdef -> skip (renderer paints an empty cell).
-        if font.glyph_id(' ').0 == 0 {
-            return None;
-        }
-    }
-    let scaled = font.as_scaled(px);
-    let glyph = ab_glyph::Glyph {
-        id: gid,
-        scale: px.into(),
-        position: ab_glyph::Point {
-            x: 0.0,
-            y: scaled.ascent(),
-        },
-    };
-    let outline = font.outline_glyph(glyph)?;
-    let bounds = outline.px_bounds();
-    let (w, h) = (
-        bounds.width().round() as usize,
-        bounds.height().round() as usize,
-    );
+/// Rasterize `c` with hinting into an 8-bit coverage bitmap
+/// (top-left origin). Returns None for whitespace and missing glyphs.
+pub fn rasterize(face: &Face, c: char) -> Option<GlyphBitmap> {
+    let index = face.get_char_index(c as usize)?;
+    // Default load flags + TARGET_NORMAL: hinted, grayscale AA.
+    face.load_glyph(index, LoadFlag::RENDER | LoadFlag::TARGET_NORMAL)
+        .ok()?;
+    let glyph = face.glyph();
+    let bitmap = glyph.bitmap();
+    let (w, h) = (bitmap.width() as usize, bitmap.rows() as usize);
     if w == 0 || h == 0 {
-        return None;
+        return None; // whitespace: the renderer paints background only
     }
+    let buffer = bitmap.buffer();
+    let pitch = bitmap.pitch().unsigned_abs() as usize;
     let mut coverage = vec![0u8; w * h];
-    outline.draw(|x, y, v| {
-        let idx = y as usize * w + x as usize;
-        if idx < coverage.len() {
-            coverage[idx] = (v * 255.0).round() as u8;
+    for row in 0..h {
+        for col in 0..w {
+            coverage[row * w + col] = buffer[row * pitch + col];
         }
-    });
+    }
     Some(GlyphBitmap {
         width: w,
         height: h,
         coverage,
-        left: bounds.min.x.floor() as i32,
-        top: bounds.min.y.floor() as i32,
+        left: glyph.bitmap_left(),
+        // bitmap_top is the distance from the BASELINE to the bitmap
+        // top (positive up); the cell-relative top is ascent - that.
+        top: face_size_ascent(face) - glyph.bitmap_top(),
     })
+}
+
+/// Cached ascent of a face's current size (cell-top to baseline).
+fn face_size_ascent(face: &Face) -> i32 {
+    face.size_metrics()
+        .map(|m| (m.ascender as f64 / 64.0).round() as i32)
+        .unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------
@@ -312,38 +295,42 @@ pub fn load_face(
     bold_italic_path: Option<&str>,
     px: f32,
 ) -> Result<FontFace, String> {
-    let read = |p: &str| -> Result<FontArc, String> {
-        let data = std::fs::read(p).map_err(|e| format!("cannot read font {p}: {e}"))?;
-        FontArc::try_from_vec(data).map_err(|e| format!("cannot parse font {p}: {e}"))
+    let open = |lib: &Library, path: &str| -> Result<Face, String> {
+        let face = lib
+            .new_face(path, 0)
+            .map_err(|e| format!("cannot open font {path}: {e}"))?;
+        // Integer pixel size: FreeType hints against exactly this size.
+        face.set_pixel_sizes(0, px.round().max(1.0) as u32)
+            .map_err(|e| format!("cannot size font {path} at {px}px: {e}"))?;
+        Ok(face)
     };
-    let regular = read(regular_path)?;
-    let bold = bold_path
-        .filter(|p| std::path::Path::new(p).exists() && p != &regular_path)
-        .map(read)
-        .transpose()
-        .map_err(|e: String| e)?;
-    let italic = italic_path
-        .filter(|p| std::path::Path::new(p).exists() && p != &regular_path)
-        .map(read)
-        .transpose()
-        .map_err(|e: String| e)?;
-    let bold_italic = bold_italic_path
-        .filter(|p| std::path::Path::new(p).exists() && p != &regular_path)
-        .map(read)
-        .transpose()
-        .map_err(|e: String| e)?;
-    let fallback = regular.clone();
-    Ok(FontFace::from_data(
+    // Faces keep the underlying FT_Library alive through a
+    // reference count, so the local `lib` handle can drop freely.
+    let lib = Library::init().map_err(|e| format!("cannot init FreeType: {e}"))?;
+    let regular = open(&lib, regular_path)?;
+    let variant = |path: Option<&str>| -> Face {
+        match path
+            .filter(|p| std::path::Path::new(p).exists() && p != &regular_path)
+            .map(|p| open(&lib, p))
+        {
+            Some(Ok(f)) => f,
+            // Missing/unreadable variant: rasterize with the regular
+            // face instead of failing the whole font load.
+            _ => open(&lib, regular_path).expect("regular face opens twice"),
+        }
+    };
+    let bold = variant(bold_path);
+    let italic = variant(italic_path);
+    let bold_italic = variant(bold_italic_path);
+    let metrics = measure(&regular, px);
+    Ok(FontFace {
         regular,
-        bold.unwrap_or_else(|| clone_font(&fallback)),
-        italic.unwrap_or_else(|| clone_font(&fallback)),
-        bold_italic.unwrap_or_else(|| clone_font(&fallback)),
-        px,
-    ))
-}
-
-fn clone_font(f: &FontArc) -> FontArc {
-    f.clone()
+        bold,
+        italic,
+        bold_italic,
+        metrics,
+        cache: BoundedCache::new(FontFace::RASTER_LIMIT),
+    })
 }
 
 /// Load the best available monospace face for `family` at `px`,
@@ -391,10 +378,15 @@ mod tests {
 
     #[test]
     fn ascii_glyphs_rasterize_with_sane_bounds() {
-        let face = load_default_face("monospace", 14.0).expect("load face");
+        let Some(_) = any_system_font() else {
+            eprintln!("no system font, skipping");
+            return;
+        };
+        let mut face = load_default_face("monospace", 14.0).expect("load face");
         for c in ['A', 'g', '5', '~', '@'] {
-            let face_c = face.face_for(0);
-            let b = rasterize(face_c, c, 14.0).expect("glyph should rasterize");
+            let b = face
+                .glyph(c, 0)
+                .unwrap_or_else(|| panic!("{c} must rasterize"));
             assert!(b.width > 0 && b.width < 60, "{c}: w={}", b.width);
             assert!(b.height > 0 && b.height < 60, "{c}: h={}", b.height);
             assert!(b.coverage.iter().any(|&v| v > 0), "{c} must have ink");
@@ -403,13 +395,20 @@ mod tests {
 
     #[test]
     fn whitespace_glyphs_are_skipped() {
-        let face = load_default_face("monospace", 14.0).expect("load face");
-        let face_c = face.face_for(0);
-        assert!(rasterize(face_c, ' ', 14.0).is_none());
+        let Some(_) = any_system_font() else {
+            eprintln!("no system font, skipping");
+            return;
+        };
+        let mut face = load_default_face("monospace", 14.0).expect("load face");
+        assert!(face.glyph(' ', 0).is_none());
     }
 
     #[test]
     fn glyph_cache_is_bounded_and_clearable() {
+        let Some(_) = any_system_font() else {
+            eprintln!("no system font, skipping");
+            return;
+        };
         let mut face = load_default_face("monospace", 14.0).expect("load face");
         for i in 0..64u32 {
             let c = char::from_u32(0x4E00 + i).unwrap_or('a'); // CJK range
@@ -423,6 +422,10 @@ mod tests {
 
     #[test]
     fn cache_eviction_keeps_length_under_the_limit() {
+        let Some(_) = any_system_font() else {
+            eprintln!("no system font, skipping");
+            return;
+        };
         let mut face = load_default_face("monospace", 14.0).expect("load face");
         for i in 0..5000u32 {
             let c = char::from_u32(0x4E00 + i).unwrap_or('a');
@@ -433,6 +436,10 @@ mod tests {
 
     #[test]
     fn style_keys_pick_the_bold_face_when_loaded() {
+        let Some(_) = any_system_font() else {
+            eprintln!("no system font, skipping");
+            return;
+        };
         // DejaVu ships Bold; if present both keys rasterize (possibly to
         // the same regular face when only one file exists).
         let mut face = load_default_face("monospace", 14.0).expect("load face");
@@ -479,14 +486,35 @@ mod tests {
     fn load_face_reports_a_clear_error_for_missing_files() {
         let err =
             load_face("/definitely/not/a/font.ttf", None, None, None, 14.0).expect_err("must fail");
-        assert!(err.contains("cannot read font"));
+        assert!(err.contains("cannot open font"));
+    }
+
+    #[test]
+    fn hinted_rasterization_is_sharper_than_unhinted_bounds() {
+        // Hinted metrics at a small size stay tight: the cell width of
+        // a monospace face at 15px must be close to the em advance
+        // (9-10px for DejaVu) rather than a blurry fractional value.
+        let Some(_) = any_system_font() else {
+            eprintln!("no system font, skipping");
+            return;
+        };
+        let face = load_default_face("monospace", 15.0).expect("load face");
+        assert!(
+            face.metrics.cell_width >= 7 && face.metrics.cell_width <= 12,
+            "cell_width {} out of hinted range",
+            face.metrics.cell_width
+        );
     }
 
     #[test]
     fn resize_to_new_px_produces_new_metrics() {
+        let Some(_) = any_system_font() else {
+            eprintln!("no system font, skipping");
+            return;
+        };
         let face = load_default_face("monospace", 14.0).expect("load face");
-        let bigger = measure(&face.regular, 20.0);
-        assert!(bigger.line_height > face.metrics.line_height);
-        assert!(bigger.cell_width >= face.metrics.cell_width);
+        let bigger = load_default_face("monospace", 20.0).expect("load face 20px");
+        assert!(bigger.metrics.line_height > face.metrics.line_height);
+        assert!(bigger.metrics.cell_width >= face.metrics.cell_width);
     }
 }

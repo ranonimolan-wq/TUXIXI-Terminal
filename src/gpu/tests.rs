@@ -324,10 +324,13 @@ fn scene_of(
     face.metrics.cell_width = cw;
     face.metrics.line_height = lh;
     let mut atlas = Atlas::new(1024);
+    let mut grid = Vec::new();
+    term.copy_visible(0, &mut grid);
     let scene = build_scene(
         &term,
         0,
         SceneInputs {
+            grid: &grid,
             palette: &flat_palette(),
             face: &mut face,
             atlas: &mut atlas,
@@ -398,10 +401,13 @@ fn hidden_cursor_draws_nothing() {
     face.metrics.cell_width = 8;
     face.metrics.line_height = 16;
     let mut atlas = Atlas::new(1024);
+    let mut grid = Vec::new();
+    term.copy_visible(0, &mut grid);
     let scene = build_scene(
         &term,
         0,
         SceneInputs {
+            grid: &grid,
             palette: &flat_palette(),
             face: &mut face,
             atlas: &mut atlas,
@@ -464,10 +470,13 @@ fn selection_highlight_is_opaque_and_distinct() {
         start: (0, 0),
         end: (2, 0),
     };
+    let mut grid = Vec::new();
+    term.copy_visible(0, &mut grid);
     let scene = build_scene(
         &term,
         0,
         SceneInputs {
+            grid: &grid,
             palette: &flat_palette(),
             face: &mut face,
             atlas: &mut atlas,
@@ -493,10 +502,13 @@ fn scrolled_view_pins_the_cursor_off() {
     face.metrics.cell_width = 8;
     face.metrics.line_height = 16;
     let mut atlas = Atlas::new(1024);
+    let mut grid = Vec::new();
+    term.copy_visible(0, &mut grid);
     let live = build_scene(
         &term,
         0,
         SceneInputs {
+            grid: &grid,
             palette: &flat_palette(),
             face: &mut face,
             atlas: &mut atlas,
@@ -504,10 +516,13 @@ fn scrolled_view_pins_the_cursor_off() {
             glass: GlassParams::default(),
         },
     );
+    let mut scrolled_grid = Vec::new();
+    term.copy_visible(sb, &mut scrolled_grid);
     let scrolled = build_scene(
         &term,
         sb,
         SceneInputs {
+            grid: &scrolled_grid,
             palette: &flat_palette(),
             face: &mut face,
             atlas: &mut atlas,
@@ -528,10 +543,13 @@ fn wide_spacer_cells_are_skipped() {
     face.metrics.cell_width = 8;
     face.metrics.line_height = 16;
     let mut atlas = Atlas::new(1024);
+    let mut grid = Vec::new();
+    term.copy_visible(0, &mut grid);
     let scene = build_scene(
         &term,
         0,
         SceneInputs {
+            grid: &grid,
             palette: &flat_palette(),
             face: &mut face,
             atlas: &mut atlas,
@@ -567,10 +585,13 @@ fn glyph_quads_use_bitmap_geometry() {
     face.metrics.cell_width = 8;
     face.metrics.line_height = 16;
     let mut atlas = Atlas::new(1024);
+    let mut grid = Vec::new();
+    term.copy_visible(0, &mut grid);
     let scene = build_scene(
         &term,
         0,
         SceneInputs {
+            grid: &grid,
             palette: &flat_palette(),
             face: &mut face,
             atlas: &mut atlas,

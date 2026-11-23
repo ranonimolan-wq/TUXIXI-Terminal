@@ -9,6 +9,7 @@
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
+use winit::keyboard::ModifiersState;
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::WindowId;
 
@@ -113,7 +114,11 @@ impl ApplicationHandler<PtyEvent> for App {
     fn user_event(&mut self, el: &ActiveEventLoop, event: PtyEvent) {
         match event {
             PtyEvent::Output(bytes) => {
+                if std::env::var_os("TUXIXI_DEBUG_INPUT").is_some() {
+                    eprintln!("pty.out: {} bytes: {bytes:?}", bytes.len());
+                }
                 self.term.feed(&bytes);
+                self.answer_term_events();
                 self.term.maintain_memory();
                 // Reflect OSC title changes in the window title.
                 if let Some(win) = &self.window {
@@ -147,15 +152,48 @@ impl ApplicationHandler<PtyEvent> for App {
             WindowEvent::RedrawRequested => {
                 self.redraw();
             }
+            WindowEvent::Focused(focused) => {
+                // Modifier releases can land in another window (Alt+Tab,
+                // menus) and leave the tracked snapshot stale; winit
+                // re-delivers the current state on the next key event.
+                if !focused {
+                    self.mods = ModifiersState::empty();
+                }
+            }
             WindowEvent::ModifiersChanged(m) => {
                 self.mods = m.state();
             }
-            WindowEvent::KeyboardInput { event, .. } => {
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic,
+                ..
+            } => {
                 if event.state != ElementState::Pressed {
+                    return;
+                }
+                // Synthetic presses are replayed by the platform after
+                // focus/mapping changes; they must never reach the child
+                // or every window switch would inject phantom keys.
+                if is_synthetic {
                     return;
                 }
                 let ctrl = self.mods.control_key();
                 let shift = self.mods.shift_key();
+
+                // Input tracing: set TUXIXI_DEBUG_INPUT=1 to log every
+                // key event (physical/logical key, produced text, repeat
+                // flag, tracked modifier state) and every byte sequence
+                // written to the PTY. This is the ground truth needed to
+                // diagnose shell-side "ghost input" reports: any byte
+                // reaching the child that the user did not type shows up
+                // verbatim here.
+                let debug_input = std::env::var_os("TUXIXI_DEBUG_INPUT").is_some();
+                if debug_input {
+                    eprintln!(
+                        "key: physical={:?} logical={:?} text={:?} repeat={} tracked={:?}",
+                        event.physical_key, event.logical_key, event.text, event.repeat, self.mods
+                    );
+                }
 
                 // Font size keys first (physical, layout-independent).
                 if ctrl && !shift {
@@ -211,6 +249,12 @@ impl ApplicationHandler<PtyEvent> for App {
                     self.scroll_offset = 0;
                 }
                 if let Some(bytes) = input::encode(key, mods, self.term.app_cursor()) {
+                    if debug_input {
+                        eprintln!(
+                            "pty.write: mods={mods:?} -> {bytes:?} ({})",
+                            String::from_utf8_lossy(&bytes)
+                        );
+                    }
                     if let Some(pty) = &self.pty {
                         pty.write(&bytes);
                     }

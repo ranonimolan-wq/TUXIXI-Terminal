@@ -60,6 +60,7 @@ pub fn run() {
         selection: None,
         select_anchor: None,
         mouse_pos: (0, 0),
+        grid_buf: Vec::new(),
         proxy,
         clipboard,
     };

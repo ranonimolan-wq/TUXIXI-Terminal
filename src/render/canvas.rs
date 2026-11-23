@@ -198,6 +198,8 @@ impl Selection {
     pub fn text(&self, term: &Terminal) -> String {
         let ((x0, y0), (x1, y1)) = self.bounds();
         let mut out = String::new();
+        let mut grid = Vec::new();
+        term.copy_visible(0, &mut grid);
         for y in y0..=y1.min(term.rows - 1) {
             let cols = term.cols;
             let lo = if y == y0 { x0 } else { 0 };
@@ -205,7 +207,7 @@ impl Selection {
             let mut line = String::new();
             let mut prev_wide = false;
             for x in lo..=hi {
-                if let Some(c) = term.cell(x, y) {
+                if let Some(c) = grid.get(y as usize * cols as usize + x as usize) {
                     if c.flags & crate::vt::WIDE_SPACER != 0 {
                         prev_wide = true;
                         continue;

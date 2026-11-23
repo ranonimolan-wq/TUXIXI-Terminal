@@ -17,7 +17,16 @@ use serde::{Deserialize, Serialize};
 use crate::theme::{theme_colors, Registry, BLUR_MODES, DEFAULT_THEME};
 
 pub const DEFAULT_FONT: &str = "Monospace";
-pub const DEFAULT_FONT_SIZE: u32 = 11;
+/// Font size in pixels. 15px matches Alacritty's default (11.25pt at
+/// 96dpi ≈ 15px); 11px (the old TUXIXI default) rendered noticeably
+/// smaller than every other mainstream terminal.
+pub const DEFAULT_FONT_SIZE: u32 = 15;
+/// Configs saved by older rolling builds (before the Alacritty-parity
+/// bump) store this value as `font_size`. On load it is remapped to
+/// [`DEFAULT_FONT_SIZE`] so existing users actually see the fix.
+/// Trade-off: 11 can no longer be *persisted*; Ctrl+Shift+Minus can
+/// still reach it at runtime, but the next start migrates it up again.
+pub const LEGACY_DEFAULT_FONT_SIZE: u32 = 11;
 pub const MIN_FONT_SIZE: u32 = 6;
 pub const MAX_FONT_SIZE: u32 = 48;
 
@@ -100,9 +109,11 @@ impl Default for Settings {
 
 impl Settings {
     /// Port of `SettingsManager._validate`: every invalid field silently
-    /// falls back to its default, out-of-range font sizes are clamped.
-    /// The legacy `"blur": true` key (pre 2.1 config format) maps to
-    /// `static` blur when `blur_mode` itself is invalid.
+    /// falls back to its default, out-of-range font sizes are clamped,
+    /// and the legacy 11px default font size migrates up to the current
+    /// default (see [`LEGACY_DEFAULT_FONT_SIZE`]). The legacy
+    /// `"blur": true` key (pre 2.1 config format) maps to `static` blur
+    /// when `blur_mode` itself is invalid.
     pub fn validate_raw(raw: &serde_json::Value) -> Self {
         let mut s = Self::default();
 
@@ -126,6 +137,13 @@ impl Settings {
             if let Some(size) = v.as_u64() {
                 s.font_size = (size as u32).clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
             }
+        }
+
+        // Migration: a config written by an older rolling build stores
+        // the old 11px default. Upgrade it so the bigger Alacritty-parity
+        // size takes effect instead of silently keeping the tiny font.
+        if s.font_size == LEGACY_DEFAULT_FONT_SIZE {
+            s.font_size = DEFAULT_FONT_SIZE;
         }
 
         if let Some(v) = obj.get("theme") {
@@ -230,7 +248,19 @@ impl SettingsManager {
                 data
             }
             Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
-                Ok(raw) => Settings::validate_raw(&raw),
+                Ok(raw) => {
+                    let data = Settings::validate_raw(&raw);
+                    // Persist one-time migrations (e.g. the legacy 11px
+                    // default font size) so the upgrade is stable and
+                    // visible in config.json instead of being re-applied
+                    // invisibly on every start.
+                    if raw.get("font_size").and_then(|v| v.as_u64())
+                        == Some(u64::from(LEGACY_DEFAULT_FONT_SIZE))
+                    {
+                        self.atomic_save(&data);
+                    }
+                    data
+                }
                 Err(e) => {
                     eprintln!("Warning: Failed to read config, using defaults: {e}");
                     Settings::default()
@@ -428,10 +458,14 @@ mod tests {
     }
 
     #[test]
-    fn defaults_match_python() {
+    fn defaults_are_sized_like_alacritty() {
         let s = Settings::default();
         assert_eq!(s.font, "Monospace");
-        assert_eq!(s.font_size, 11);
+        assert_eq!(s.font_size, 15);
+        assert_eq!(DEFAULT_FONT_SIZE, 15);
+        assert_eq!(LEGACY_DEFAULT_FONT_SIZE, 11);
+        // The migration must never fire on the new default itself.
+        assert_ne!(DEFAULT_FONT_SIZE, LEGACY_DEFAULT_FONT_SIZE);
         assert_eq!(s.theme, "TokyoNight");
         assert!(!s.transparent);
         assert_eq!(s.blur_mode, BlurMode::Off);
@@ -453,10 +487,56 @@ mod tests {
         assert_eq!(Settings::validate_raw(&raw).font_size, MIN_FONT_SIZE);
         let raw = serde_json::json!({"font_size": 24});
         assert_eq!(Settings::validate_raw(&raw).font_size, 24);
+        // The old default (11) is exactly the migration trigger.
+        let raw = serde_json::json!({"font_size": LEGACY_DEFAULT_FONT_SIZE});
+        assert_eq!(Settings::validate_raw(&raw).font_size, DEFAULT_FONT_SIZE);
+        // Custom (non-legacy) sizes pass through untouched.
+        let raw = serde_json::json!({"font_size": 12});
+        assert_eq!(Settings::validate_raw(&raw).font_size, 12);
+        let raw = serde_json::json!({"font_size": 19});
+        assert_eq!(Settings::validate_raw(&raw).font_size, 19);
         let raw = serde_json::json!({"font_size": true});
         assert_eq!(Settings::validate_raw(&raw).font_size, DEFAULT_FONT_SIZE);
         let raw = serde_json::json!({"font_size": "24"});
         assert_eq!(Settings::validate_raw(&raw).font_size, DEFAULT_FONT_SIZE);
+    }
+
+    #[test]
+    fn legacy_font_size_config_migrates_once_and_custom_sizes_survive_reloads() {
+        let dir = temp_config_dir("fontmigration");
+        let path = dir.join("config.json");
+
+        // 1) A config written by an older rolling build (old default 11).
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            &path,
+            r#"{"font": "Monospace", "font_size": 11, "theme": "TokyoNight"}"#,
+        )
+        .unwrap();
+        let mgr = SettingsManager::load(&path);
+        assert_eq!(
+            mgr.get().font_size,
+            DEFAULT_FONT_SIZE,
+            "saved legacy default 11 must load as the new default"
+        );
+        // The migration is persisted so it is stable across restarts.
+        let saved: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            saved.get("font_size").and_then(|v| v.as_u64()),
+            Some(u64::from(DEFAULT_FONT_SIZE)),
+            "migrated size is written back to config.json"
+        );
+
+        // 2) A deliberately custom size must NOT be touched by the
+        //    migration on any number of reloads.
+        let mut mgr = mgr;
+        mgr.change_font_size(-3); // 15 - 3 = 12 (custom, non-legacy)
+        assert_eq!(mgr.get().font_size, 12);
+        let reloaded = SettingsManager::load(&path);
+        assert_eq!(reloaded.get().font_size, 12, "custom size survives reload");
+
+        fs::remove_dir_all(dir).ok();
     }
 
     #[test]
@@ -543,7 +623,7 @@ mod tests {
         let dir = temp_config_dir("fontsize");
         let path = dir.join("config.json");
         let mut mgr = SettingsManager::load(&path);
-        // 11 - 100 clamps to 6: a change, so it returns true.
+        // 15 - 100 clamps to 6: a change, so it returns true.
         assert!(mgr.change_font_size(-100));
         assert_eq!(mgr.get().font_size, MIN_FONT_SIZE);
         // Already at the minimum: clamped to the same value -> no change.
@@ -576,12 +656,12 @@ mod tests {
         let log = seen.borrow();
         assert_eq!(log.len(), 2, "one notification per actual change");
         assert!(
-            log[0].ends_with("@11"),
+            log[0].ends_with("@15"),
             "font unchanged by theme cycle: {}",
             log[0]
         );
         assert!(
-            log[1].ends_with("@13"),
+            log[1].ends_with("@17"),
             "new font size delivered: {}",
             log[1]
         );

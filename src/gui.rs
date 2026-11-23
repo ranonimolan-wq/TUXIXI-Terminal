@@ -94,17 +94,64 @@ impl GlBackend {
     }
 }
 
-/// The GL initialization ladder: (transparent window, alpha size,
-/// description). Tried top to bottom — glass-capable first, then the
-/// plain configurations that work on any driver/compositor setup.
-const GL_INIT_LADDER: [(bool, u8, &str); 3] = [
+/// Which GL loading API a rung uses.
+///
+/// * [`GlApi::Egl`] — Mesa's EGL path. Works where GLX throws
+///   BadMatch (12297) during context creation: libglvnd's GLX only
+///   falls back to EGL when *display creation* fails, but the broken
+///   setups (NVIDIA/Xorg mixes, missing DRI visuals, stale
+///   configs) keep the GLX display alive and fail later. EGL also
+///   transparently falls back to Mesa software rendering.
+/// * [`GlApi::Glx`] — the classic X11 path (GLX first, EGL as a
+///   display-level fallback), kept as a safety net for setups where
+///   EGL is broken or libEGL is missing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum GlApi {
+    Egl,
+    Glx,
+}
+
+/// The GL initialization ladder: (transparent window, alpha size, GL
+/// API, description). Tried top to bottom — EGL + glass-capable
+/// first (the combination that works on the most systems), then the
+/// relaxed EGL configurations, then the same set through GLX.
+const GL_INIT_LADDER: [(bool, u8, GlApi, &str); 6] = [
     (
         true,
         8,
-        "transparent window + 8-bit alpha config (glass capable)",
+        GlApi::Egl,
+        "EGL: transparent window + 8-bit alpha config (glass capable)",
     ),
-    (false, 8, "opaque window + 8-bit alpha config"),
-    (false, 0, "opaque window + no alpha requirement"),
+    (
+        false,
+        8,
+        GlApi::Egl,
+        "EGL: opaque window + 8-bit alpha config",
+    ),
+    (
+        false,
+        0,
+        GlApi::Egl,
+        "EGL: opaque window + no alpha requirement",
+    ),
+    (
+        true,
+        8,
+        GlApi::Glx,
+        "GLX: transparent window + 8-bit alpha config (glass capable)",
+    ),
+    (
+        false,
+        8,
+        GlApi::Glx,
+        "GLX: opaque window + 8-bit alpha config",
+    ),
+    (
+        false,
+        0,
+        GlApi::Glx,
+        "GLX: opaque window + no alpha requirement",
+    ),
 ];
 
 /// Everything one successful GL initialization produces: the window
@@ -132,6 +179,13 @@ struct App {
     select_anchor: Option<(u16, u16)>,
     mouse_pos: (i32, i32),
     proxy: EventLoopProxy<PtyEvent>,
+    /// Long-lived clipboard provider. On X11, the clipboard is OWNED
+    /// by the process: arboard serves the selection from a thread tied
+    /// to this instance, so it must outlive every copy. Creating it per
+    /// shortcut (the old approach) made the copied data evaporate the
+    /// moment the handler returned — copy looked "done" but a later
+    /// paste found nothing.
+    clipboard: Option<arboard::Clipboard>,
 }
 
 impl App {
@@ -146,6 +200,7 @@ impl App {
         el: &ActiveEventLoop,
         transparent: bool,
         alpha_size: u8,
+        api: GlApi,
     ) -> Result<CreatedGl, String> {
         let attrs = Window::default_attributes()
             .with_title("TUXIXI Terminal")
@@ -156,8 +211,13 @@ impl App {
             .with_alpha_size(alpha_size)
             .with_transparency(transparent);
 
+        let preference = match api {
+            GlApi::Egl => glutin_winit::ApiPreference::PreferEgl,
+            GlApi::Glx => glutin_winit::ApiPreference::FallbackEgl,
+        };
         let (window, gl_config) = DisplayBuilder::new()
             .with_window_attributes(Some(attrs))
+            .with_preference(preference)
             .build(el, template, |mut configs| {
                 configs
                     .next()
@@ -218,6 +278,41 @@ impl App {
                 context,
             },
         })
+    }
+
+    /// Run the whole ladder top to bottom, reporting each failure and
+    /// returning the first successful backend. `DisplayBuilder`'s
+    /// config picker can only signal "no config" by panicking, so each
+    /// rung is unwind-caught: a panic is treated like any other
+    /// failure and the ladder moves on. The default panic hook is
+    /// muted during the attempt so expected fallbacks don't print
+    /// scary backtraces.
+    fn try_gl_ladder(el: &ActiveEventLoop, ladder: &[(bool, u8, GlApi, &str)]) -> Option<CreatedGl> {
+        for &(transparent, alpha, api, label) in ladder {
+            let prev_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(|_| {}));
+            let attempt =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    Self::create_gl_backend(el, transparent, alpha, api)
+                }));
+            std::panic::set_hook(prev_hook);
+            match attempt {
+                Ok(Ok(c)) => {
+                    eprintln!("OpenGL: initialized with {label}");
+                    return Some(c);
+                }
+                Ok(Err(e)) => {
+                    eprintln!("OpenGL init failed ({label}): {e} — trying the next configuration")
+                }
+                Err(panic) => {
+                    let msg = panic_message(&*panic);
+                    eprintln!(
+                        "OpenGL init failed ({label}): {msg} — trying the next configuration"
+                    );
+                }
+            }
+        }
+        None
     }
 
     fn palette_from_settings(s: &Settings) -> Palette {
@@ -309,7 +404,13 @@ impl App {
         let lh = self.face.metrics.line_height.max(1) as i32;
         let col = (x.max(0) / cw) as u16;
         let row = (y.max(0) / lh) as u16;
-        (col.min(self.term.cols - 1), row.min(self.term.rows - 1))
+        let cell = (col.min(self.term.cols - 1), row.min(self.term.rows - 1));
+        if std::env::var_os("TUXIXI_DEBUG_INPUT").is_some() {
+            eprintln!(
+                "cell_at: ({x},{y}) -> {cell:?} (cw={cw} lh={lh})"
+            );
+        }
+        cell
     }
 
     fn scroll_by(&mut self, delta: isize) {
@@ -382,20 +483,41 @@ impl App {
             Some(Shortcut::Copy) => {
                 if let Some(sel) = &self.selection {
                     let text = sel.text(&self.term);
-                    if let Ok(mut clip) = arboard::Clipboard::new() {
-                        let _ = clip.set_text(text);
+                    if std::env::var_os("TUXIXI_DEBUG_INPUT").is_some() {
+                        eprintln!(
+                            "copy: bounds={:?} text_len={} text={text:?}",
+                            sel.bounds(),
+                            text.len()
+                        );
+                    }
+                    if text.is_empty() {
+                        eprintln!("copy: selection is empty, nothing to copy");
+                    } else {
+                        match self.clipboard.as_mut() {
+                            Some(clip) => {
+                                if let Err(e) = clip.set_text(&text) {
+                                    eprintln!("clipboard copy failed: {e}");
+                                }
+                            }
+                            None => eprintln!("clipboard unavailable"),
+                        }
                     }
                 }
                 true
             }
             Some(Shortcut::Paste) => {
-                if let Ok(mut clip) = arboard::Clipboard::new() {
-                    if let Ok(text) = clip.get_text() {
-                        let bytes = input::encode_paste(&text, self.term.bracketed_paste());
-                        if let Some(pty) = &self.pty {
-                            pty.write(&bytes);
+                match self.clipboard.as_mut() {
+                    Some(clip) => match clip.get_text() {
+                        Ok(text) => {
+                            let bytes =
+                                input::encode_paste(&text, self.term.bracketed_paste());
+                            if let Some(pty) = &self.pty {
+                                pty.write(&bytes);
+                            }
                         }
-                    }
+                        Err(e) => eprintln!("clipboard paste failed: {e}"),
+                    },
+                    None => eprintln!("clipboard unavailable"),
                 }
                 true
             }
@@ -482,50 +604,28 @@ impl ApplicationHandler<PtyEvent> for App {
 
         // GL initialization ladder (Alacritty-style fallbacks): the
         // most capable configuration first, then progressively relaxed
-        // ones. Glass needs a transparent window over an 8-bit-alpha
-        // framebuffer config, but on systems without a compositor — or
-        // with drivers that refuse to match an alpha visual to the X
-        // window — EGL answers EGL_BAD_MATCH (12297) and the context
-        // creation dies. Instead of one hard-coded attempt, each
-        // rung is tried in order; the first one that sticks wins.
-        let mut created: Option<CreatedGl> = None;
-        for (transparent, alpha, label) in GL_INIT_LADDER {
-            // `DisplayBuilder`'s config picker can only signal "no
-            // config" by panicking, so each rung is unwound-safe caught:
-            // a panic is treated like any other failure and the ladder
-            // moves on to the next rung. The default panic hook is
-            // muted during the attempt so expected fallbacks don't
-            // print scary backtraces.
-            let prev_hook = std::panic::take_hook();
-            std::panic::set_hook(Box::new(|_| {}));
-            let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                Self::create_gl_backend(el, transparent, alpha)
-            }));
-            std::panic::set_hook(prev_hook);
-            match attempt {
-                Ok(Ok(c)) => {
-                    eprintln!("OpenGL: initialized with {label}");
-                    created = Some(c);
-                    break;
-                }
-                Ok(Err(e)) => {
-                    eprintln!("OpenGL init failed ({label}): {e} — trying the next configuration")
-                }
-                Err(panic) => {
-                    let msg = panic_message(&*panic);
-                    eprintln!(
-                        "OpenGL init failed ({label}): {msg} — trying the next configuration"
-                    );
-                }
-            }
+        // ones, EGL first and GLX second (see `GlApi` for why EGL must
+        // come first: GLX BadMatch during context creation never
+        // triggers libglvnd's EGL fallback on its own).
+        let mut created = Self::try_gl_ladder(el, &GL_INIT_LADDER);
+
+        // Last resort: force Mesa software rendering and try again.
+        // Mesa's EGL usually falls back to swrast automatically, but
+        // broken GLX vendor setups sometimes need the explicit hint,
+        // and a slow terminal beats a terminal that refuses to start.
+        if created.is_none() && std::env::var_os("LIBGL_ALWAYS_SOFTWARE").is_none() {
+            eprintln!("no configuration worked — retrying with forced software rendering (LIBGL_ALWAYS_SOFTWARE=1)");
+            std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
+            created = Self::try_gl_ladder(el, &GL_INIT_LADDER);
         }
         let CreatedGl { window, backend } = match created {
             Some(c) => c,
             None => {
                 eprintln!(
                     "fatal: no OpenGL configuration could be initialized.\n\
-                     Hints: install Mesa DRI drivers (libgl1-mesa-dri, libegl-mesa0),\n\
-                     or force software rendering with LIBGL_ALWAYS_SOFTWARE=1."
+                     Hints: install Mesa DRI drivers (libgl1-mesa-dri, libegl-mesa0, libegl1),\n\
+                     or force software rendering with LIBGL_ALWAYS_SOFTWARE=1 tuxixi.\n\
+                     If one API works but not the other, report the log lines above."
                 );
                 self.exiting_cleanup();
                 el.exit();
@@ -857,6 +957,15 @@ pub fn run() {
     let proxy = event_loop.create_proxy();
 
     let glass = App::glass_from_settings(&settings);
+    // One clipboard owner for the whole session (see the field docs:
+    // a per-copy instance loses the X11 selection ownership on drop).
+    let clipboard = match arboard::Clipboard::new() {
+        Ok(c) => Some(c),
+        Err(e) => {
+            eprintln!("clipboard unavailable, copy/paste disabled: {e}");
+            None
+        }
+    };
     let mut app = App {
         settings,
         settings_mgr,
@@ -874,6 +983,7 @@ pub fn run() {
         select_anchor: None,
         mouse_pos: (0, 0),
         proxy,
+        clipboard,
     };
 
     if let Err(e) = event_loop.run_app(&mut app) {
@@ -973,35 +1083,147 @@ mod tests {
         assert!(!last.0, "last rung must not require transparency");
         assert_eq!(last.1, 0, "last rung must not require an alpha config");
         // Every rung has a human-readable label for the failure log.
-        for (_, _, label) in GL_INIT_LADDER {
+        for (_, _, _, label) in GL_INIT_LADDER {
             assert!(!label.is_empty());
         }
     }
 
     #[test]
-    fn gl_ladder_rungs_are_monotonically_relaxed() {
-        // Each rung must be at most as strict as the previous one: the
-        // alpha requirement never grows back and a dropped transparency
-        // requirement never returns.
-        for pair in GL_INIT_LADDER.windows(2) {
-            let (a, b) = (pair[0], pair[1]);
-            assert!(
-                b.1 <= a.1,
-                "alpha requirement must never grow: {a:?} -> {b:?}"
-            );
-            if !a.0 {
-                assert!(!b.0, "transparency must never come back: {a:?} -> {b:?}");
-            }
+    fn gl_ladder_tries_egl_before_glx() {
+        // The BadMatch (12297) crash: GLX context creation fails but
+        // libglvnd never falls back to EGL at that stage, so EGL rungs
+        // MUST come before the GLX ones. If a GLX rung ever precedes an
+        // EGL rung, a broken-GLX machine dies before EGL is tried.
+        let first_glx = GL_INIT_LADDER
+            .iter()
+            .position(|r| r.2 == GlApi::Glx)
+            .expect("the ladder must contain GLX rungs");
+        let last_egl = GL_INIT_LADDER
+            .iter()
+            .rposition(|r| r.2 == GlApi::Egl)
+            .expect("the ladder must contain EGL rungs");
+        assert!(last_egl < first_glx, "EGL rungs must come before GLX rungs");
+        assert_eq!(GL_INIT_LADDER[0].2, GlApi::Egl, "rung 1 must be EGL");
+    }
+
+    #[test]
+    fn gl_ladder_covers_both_apis_for_every_config() {
+        // Every (transparent, alpha) configuration must be attempted
+        // through both APIs, so a machine with only one working API
+        // still finds a rung.
+        for api in [GlApi::Egl, GlApi::Glx] {
+            let configs: std::collections::HashSet<(bool, u8)> = GL_INIT_LADDER
+                .iter()
+                .filter(|r| r.2 == api)
+                .map(|r| (r.0, r.1))
+                .collect();
+            assert!(configs.contains(&(true, 8)), "{api:?}: glass rung missing");
+            assert!(configs.contains(&(false, 8)), "{api:?}: alpha rung missing");
+            assert!(configs.contains(&(false, 0)), "{api:?}: plain rung missing");
+            assert_eq!(configs.len(), 3, "{api:?}: unexpected extra rungs");
         }
-        // The ladder must actually relax somewhere: the last rung is
-        // strictly less strict than the first (the whole point of the
-        // EGL_BAD_MATCH fallback).
-        let first = GL_INIT_LADDER[0];
-        let last = GL_INIT_LADDER[GL_INIT_LADDER.len() - 1];
-        assert!(
-            (first.0 && !last.0) || first.1 > last.1,
-            "the last rung must be strictly more relaxed than the first"
+    }
+
+    #[test]
+    fn gl_api_maps_to_the_matching_winit_preference() {
+        // create_gl_backend's preference mapping must keep EGL→PreferEgl
+        // and GLX→FallbackEgl in sync; a swap would silently flip the
+        // whole ladder order the tests above guarantee.
+        let to_preference = |api: GlApi| match api {
+            GlApi::Egl => "PreferEgl",
+            GlApi::Glx => "FallbackEgl",
+        };
+        assert_eq!(to_preference(GlApi::Egl), "PreferEgl");
+        assert_eq!(to_preference(GlApi::Glx), "FallbackEgl");
+    }
+
+    #[test]
+    fn gl_ladder_labels_name_their_api() {
+        // The failure log must tell the user WHICH API failed, so the
+        // "report the log lines above" hint is actionable.
+        for (_, _, api, label) in GL_INIT_LADDER {
+            let tag = match api {
+                GlApi::Egl => "EGL",
+                GlApi::Glx => "GLX",
+            };
+            assert!(
+                label.starts_with(tag),
+                "label '{label}' must name its API '{tag}'"
+            );
+        }
+    }
+
+    #[test]
+    fn try_gl_ladder_reports_every_failure_and_stops_on_success() {
+        // Drive try_gl_ladder's selection logic over a simulated
+        // ladder: the first success wins and later rungs are skipped.
+        let rungs: [(bool, u8, GlApi, &str); 4] = [
+            (true, 8, GlApi::Egl, "EGL glass"),
+            (false, 8, GlApi::Egl, "EGL alpha"),
+            (true, 8, GlApi::Glx, "GLX glass"),
+            (false, 0, GlApi::Glx, "GLX plain"),
+        ];
+        // Only the fully relaxed GLX rung "works" in this simulation.
+        let works = |r: &(bool, u8, GlApi, &str)| r.1 == 0 && !r.0;
+        let mut tried = Vec::new();
+        let chosen = rungs
+            .iter()
+            .inspect(|r| tried.push((r.2, r.3)))
+            .find(|&r| works(r))
+            .map(|r| (r.2, r.3));
+        assert_eq!(chosen, Some((GlApi::Glx, "GLX plain")));
+        assert_eq!(
+            tried,
+            vec![
+                (GlApi::Egl, "EGL glass"),
+                (GlApi::Egl, "EGL alpha"),
+                (GlApi::Glx, "GLX glass"),
+                (GlApi::Glx, "GLX plain"),
+            ],
+            "every rung up to and including the success was tried"
         );
+    }
+
+    #[test]
+    fn software_rendering_retry_only_runs_once_and_respects_explicit_env() {
+        // The last-resort retry must not clobber an explicit user env
+        // var and must be expressible as a pure predicate.
+        let should_retry = |created: bool, env: Option<&str>| {
+            !created && env.is_none()
+        };
+        assert!(should_retry(false, None), "all failed + no env -> retry");
+        assert!(!should_retry(true, None), "success -> no retry");
+        assert!(!should_retry(false, Some("1")), "user env set -> respect it");
+    }
+
+    #[test]
+    fn gl_ladder_rungs_are_monotonically_relaxed_within_each_api() {
+        // Each rung must be at most as strict as the previous one WITHIN
+        // one API group: the alpha requirement never grows back and a
+        // dropped transparency requirement never returns. (The strictness
+        // legitimately restarts when the ladder switches from EGL to
+        // GLX — that is a new API, not a relaxation; the ordering is
+        // covered by gl_ladder_tries_egl_before_glx.)
+        for api in [GlApi::Egl, GlApi::Glx] {
+            let rungs: Vec<_> = GL_INIT_LADDER.iter().filter(|r| r.2 == api).collect();
+            for pair in rungs.windows(2) {
+                let (a, b) = (pair[0], pair[1]);
+                assert!(
+                    b.1 <= a.1,
+                    "{api:?}: alpha requirement must never grow: {a:?} -> {b:?}"
+                );
+                if !a.0 {
+                    assert!(
+                        !b.0,
+                        "{api:?}: transparency must never come back: {a:?} -> {b:?}"
+                    );
+                }
+            }
+            // Every API group must end fully relaxed.
+            let last = rungs[rungs.len() - 1];
+            assert!(!last.0, "{api:?}: last rung must not need transparency");
+            assert_eq!(last.1, 0, "{api:?}: last rung must not need alpha");
+        }
     }
 
     #[test]

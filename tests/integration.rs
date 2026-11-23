@@ -38,7 +38,7 @@ fn full_cli_dispatch_matrix() {
         (vec!["--nope"], 2, "Unknown command"),
     ];
     for (args, code, needle) in cases {
-        let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let owned: Vec<String> = args.iter().map(std::string::ToString::to_string).collect();
         let out = cli::dispatch(&owned);
         assert_eq!(out.exit_code, code, "args: {args:?}");
         let combined = format!("{}{}", out.stdout, out.stderr);

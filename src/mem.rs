@@ -43,7 +43,7 @@ impl<T> BoundedDeque<T> {
     /// A bounded, empty deque (no heap allocation until first push).
     pub fn new(cap: usize) -> Self {
         Self {
-            inner: VecDeque::with_capacity(0),
+            inner: VecDeque::new(),
             cap: cap.max(1),
             evictions_since_maintain: 0,
         }

@@ -118,7 +118,9 @@ fn is_safe_manifest_path(path: &str) -> bool {
         return false;
     }
     let components: Vec<&str> = path.split('/').collect();
-    let file = components[components.len() - 1];
+    let Some(file) = components.last().copied() else {
+        return false;
+    };
     if !is_safe_theme_file_name(file) {
         return false;
     }

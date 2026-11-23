@@ -31,8 +31,7 @@ fn main() -> ExitCode {
     ];
     let is_cli = args
         .first()
-        .map(|a| cli_commands.contains(&a.as_str()))
-        .unwrap_or(false);
+        .is_some_and(|a| cli_commands.contains(&a.as_str()));
 
     if is_cli {
         return ExitCode::from(tuxixi::cli::run_and_print(&args) as u8);

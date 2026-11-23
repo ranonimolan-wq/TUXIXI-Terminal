@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0
+// Copyright (c) 2026 ranonimolan-wq / TUXIXI. All rights reserved.
+
 //! Glass blur: the compositor-side half of the glass mode.
 //!
 //! The renderer half (translucent background alpha) lives in

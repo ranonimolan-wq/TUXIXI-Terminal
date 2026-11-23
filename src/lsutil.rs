@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0
+// Copyright (c) 2026 ranonimolan-wq / TUXIXI. All rights reserved.
+
 //! Ports of the tiny shell utilities shipped in the repo root.
 //! `ll` -> `ls -lah --color=auto --group-directories-first`, replaced
 //! by a self-contained, human-readable listing; `cls` -> `clear` with

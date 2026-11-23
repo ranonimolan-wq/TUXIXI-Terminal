@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0
+// Copyright (c) 2026 ranonimolan-wq / TUXIXI. All rights reserved.
+
 //! `tuxixi` binary entry point.
 //!
 //! * `tuxixi --help | --version | --sys | --system | --ip | --welcome`

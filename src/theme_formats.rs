@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0
+// Copyright (c) 2026 ranonimolan-wq / TUXIXI. All rights reserved.
+
 //! Readers for the REAL upstream theme formats.
 //!
 //! TUXIXI does not require themes to be converted to its own JSON

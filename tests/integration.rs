@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0
+// Copyright (c) 2026 ranonimolan-wq / TUXIXI. All rights reserved.
+
 //! Integration tests: run the whole CLI through its public interface
 //! and verify cross-module behavior (settings <-> theme pipeline,
 //! themes <-> cli, input encoding <-> vt state).

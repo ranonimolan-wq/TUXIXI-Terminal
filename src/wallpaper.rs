@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0
+// Copyright (c) 2026 ranonimolan-wq / TUXIXI. All rights reserved.
+
 //! Port of `themes.py` wallpaper detection (`_clean_path`,
 //! `detect_wallpaper_path`): KDE, LXQt/PCManFM, XFCE, GNOME/Cinnamon/MATE
 //! (gsettings), feh and nitrogen are probed in the same order.

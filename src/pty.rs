@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0
+// Copyright (c) 2026 ranonimolan-wq / TUXIXI. All rights reserved.
+
 //! PTY management for the winit GUI: openpty + fork + exec, a reader
 //! thread that forwards child output to the GUI event loop, and
 //! `TIOCSWINSZ` resize propagation (the kernel then delivers SIGWINCH

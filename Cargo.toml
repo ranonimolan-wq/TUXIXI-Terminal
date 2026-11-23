@@ -57,7 +57,7 @@ vte = "0.13"
 # Wide-character column measurement for the grid.
 unicode-width = "0.2"
 # PTY: openpty / fork / setsid / execvp / kill.
-nix = { version = "0.29", optional = true, features = ["term", "process", "signal", "fs"] }
+nix = { version = "0.29", optional = true, features = ["term", "process", "signal", "fs", "user"] }
 # Clipboard (copy/paste). No image support -> smaller dependency tree.
 arboard = { version = "3", optional = true, default-features = false }
 

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0
+// Copyright (c) 2026 ranonimolan-wq / TUXIXI. All rights reserved.
+
 //! TUXIXI Terminal - Rust implementation.
 //!
 //! Everything GUI-independent lives in the root modules and is fully

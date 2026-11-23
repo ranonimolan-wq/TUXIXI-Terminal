@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0
+// Copyright (c) 2026 ranonimolan-wq / TUXIXI. All rights reserved.
+
 //! Font loading and glyph rasterization for the winit GUI.
 //!
 //! The font is located with `fc-match` (fontconfig, the same lookup

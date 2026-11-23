@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0
+// Copyright (c) 2026 ranonimolan-wq / TUXIXI. All rights reserved.
+
 // Probe: arboard clipboard roundtrip. Skips gracefully on systems
 // without a display (CI) — the test needs a live X11/Wayland server.
 #[cfg(feature = "gui")]

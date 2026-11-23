@@ -1,8 +1,9 @@
+// SPDX-License-Identifier: GPL-3.0
+// Copyright (c) 2026 ranonimolan-wq / TUXIXI. All rights reserved.
+
 //! Port of the system/network diagnostics from `bin/tuxixi`
 //! (`show_sys`, `show_ip`). Gathering is separated from formatting so
 //! every formatter can be tested with synthetic data.
-
-use std::path::Path;
 
 use crate::lsutil::human_size;
 
@@ -262,12 +263,6 @@ pub fn gather_sys() -> SysInfo {
             .unwrap_or_else(|| "Unavailable".to_string()),
         root_disk: root_disk_info().unwrap_or_else(|| "Unavailable".to_string()),
     }
-}
-
-/// Check a path exists helper kept for tests readability.
-#[allow(dead_code)]
-pub fn path_exists(p: &Path) -> bool {
-    p.exists()
 }
 
 #[cfg(test)]

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0
+// Copyright (c) 2026 ranonimolan-wq / TUXIXI. All rights reserved.
+
 //! Keyboard input encoding: maps abstract key events (produced by the
 //! winit GUI from `winit::event::KeyEvent`) into the byte sequences a
 //! VT client expects.
@@ -230,6 +233,34 @@ pub fn encode_paste(text: &str, bracketed: bool) -> Vec<u8> {
         // Strip CR from CRLF pairs like real terminals do on paste.
         text.replace("\r\n", "\n").into_bytes()
     }
+}
+
+/// Strip the AltGr encoding from a modifier state.
+///
+/// On X11/Wayland the AltGr key (right Alt) is reported as the combined
+/// `CONTROL | ALT` modifier state, so every character produced through
+/// AltGr (e.g. `@`, `{`, `}`, `$` on European layouts) arrives with both
+/// flags set. Such a character must reach the child as plain text:
+/// encoding it through [`encode_char`] would prefix ESC, and shells then
+/// interpret the keystroke as a meta/vi binding instead of an inserted
+/// character — visible as redrawn command lines and stray characters.
+/// Single-modifier states and non-character keys are preserved so real
+/// `alt+letter` meta bindings and modified cursor keys keep working.
+pub fn strip_altgr(key: Key, mods: Modifiers) -> Modifiers {
+    if mods.logo {
+        // The GUI never acts on logo-modified keys, so keep the state
+        // exactly as received and let encode() skip them.
+        return mods;
+    }
+    if matches!(key, Key::Char(_)) && mods.ctrl && mods.alt {
+        return Modifiers {
+            ctrl: false,
+            alt: false,
+            shift: mods.shift,
+            logo: mods.logo,
+        };
+    }
+    mods
 }
 
 #[cfg(test)]
@@ -473,5 +504,48 @@ mod tests {
             encode(Key::Char('ö'), mods(true, false, false), false),
             Some("ö".as_bytes().to_vec())
         );
+    }
+
+    #[test]
+    fn altgr_character_keys_are_stripped_to_plain_text() {
+        // AltGr+s arrives as ctrl+alt and must encode like plain text.
+        let altgr = mods(true, true, false);
+        let stripped = strip_altgr(Key::Char('s'), altgr);
+        assert_eq!(encode(Key::Char('s'), stripped, false), Some(bytes("s")));
+        // AltGr-produced symbols behave identically.
+        let stripped_at = strip_altgr(Key::Char('@'), altgr);
+        assert_eq!(encode(Key::Char('@'), stripped_at, false), Some(bytes("@")));
+        // AltGr with shift keeps the shift so shifted AltGr symbols work.
+        let altgr_shift = strip_altgr(Key::Char('$'), mods(true, true, true));
+        assert!(!altgr_shift.ctrl);
+        assert!(!altgr_shift.alt);
+        assert!(altgr_shift.shift);
+    }
+
+    #[test]
+    fn altgr_strip_only_touches_char_keys_with_ctrl_and_alt() {
+        // Non-character keys keep ctrl+alt (modified cursor sequences).
+        let altgr = mods(true, true, false);
+        assert_eq!(strip_altgr(Key::Up, altgr), altgr);
+        assert_eq!(strip_altgr(Key::Delete, altgr), altgr);
+        assert_eq!(strip_altgr(Key::Enter, altgr), altgr);
+        // Real single-modifier bindings are preserved untouched.
+        assert_eq!(
+            strip_altgr(Key::Char('b'), mods(false, true, false)),
+            mods(false, true, false)
+        );
+        assert_eq!(
+            strip_altgr(Key::Char('c'), mods(true, false, false)),
+            mods(true, false, false)
+        );
+        assert_eq!(strip_altgr(Key::Char('s'), NONE), NONE);
+        // logo never gets stripped away.
+        let logo_altgr = Modifiers {
+            ctrl: true,
+            alt: true,
+            shift: false,
+            logo: true,
+        };
+        assert_eq!(strip_altgr(Key::Char('s'), logo_altgr), logo_altgr);
     }
 }

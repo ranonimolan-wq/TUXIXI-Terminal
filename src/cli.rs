@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0
+// Copyright (c) 2026 ranonimolan-wq / TUXIXI. All rights reserved.
+
 //! Port of `bin/tuxixi`: the TUXIXI command line interface.
 //!
 //! All commands write into injectable writers and return an exit code,
@@ -343,110 +346,109 @@ fn external_ip() -> Option<String> {
 }
 
 /// Exact port of `show_help`.
-#[allow(non_snake_case)]
 pub fn help_text() -> String {
-    let B = sysinfo::BOLD;
-    let R = sysinfo::RESET;
-    let P = sysinfo::PURPLE;
-    let C = sysinfo::CYAN;
-    let L = sysinfo::LIME;
-    let S = sysinfo::SLATE;
-    let A = sysinfo::AMBER;
+    let b = sysinfo::BOLD;
+    let r = sysinfo::RESET;
+    let p = sysinfo::PURPLE;
+    let c = sysinfo::CYAN;
+    let l = sysinfo::LIME;
+    let s = sysinfo::SLATE;
+    let a = sysinfo::AMBER;
 
     let mut out = String::new();
     out.push('\n');
-    out.push_str(&format!("{B}{P}◆ TUXIXI TERMINAL{R} {S}v{VERSION}{R}\n"));
+    out.push_str(&format!("{b}{p}◆ TUXIXI TERMINAL{r} {s}v{VERSION}{r}\n"));
     out.push_str(&format!(
-        "{S}────────────────────────────────────────{R}\n\n"
+        "{s}────────────────────────────────────────{r}\n\n"
     ));
 
-    out.push_str(&format!("{B}{C}COMMANDS{R}\n"));
-    out.push_str(&format!("  {L}tuxixi --help{R}      {S}Display help{R}\n"));
+    out.push_str(&format!("{b}{c}COMMANDS{r}\n"));
+    out.push_str(&format!("  {l}tuxixi --help{r}      {s}Display help{r}\n"));
     out.push_str(&format!(
-        "  {L}tuxixi --version{R}   {S}Version information{R}\n"
+        "  {l}tuxixi --version{r}   {s}Version information{r}\n"
     ));
     out.push_str(&format!(
-        "  {L}tuxixi --system{R}    {S}System information{R}\n"
+        "  {l}tuxixi --system{r}    {s}System information{r}\n"
     ));
     out.push_str(&format!(
-        "  {L}tuxixi --sys{R}       {S}System information{R}\n"
+        "  {l}tuxixi --sys{r}       {s}System information{r}\n"
     ));
     out.push_str(&format!(
-        "  {L}tuxixi --ip{R}        {S}Network information{R}\n\n"
-    ));
-
-    out.push_str(&format!("{B}{C}UPDATES{R}\n"));
-    out.push_str(&format!(
-        "  {L}tuxixi update{R}           {S}Update binary + themes (hash based){R}\n"
-    ));
-    out.push_str(&format!(
-        "  {L}tuxixi update --self{R}    {S}Update the tuxixi binary itself{R}\n"
-    ));
-    out.push_str(&format!(
-        "  {L}tuxixi update --theme{R}   {S}Sync themes from the repository{R}\n"
-    ));
-    out.push_str(&format!(
-        "  {L}tuxixi update --check{R}   {S}Only show what would change{R}\n\n"
+        "  {l}tuxixi --ip{r}        {s}Network information{r}\n\n"
     ));
 
-    out.push_str(&format!("{B}{C}THEMES{R}\n"));
+    out.push_str(&format!("{b}{c}UPDATES{r}\n"));
     out.push_str(&format!(
-        "  {S}32 built-in themes (the real upstream files), default: {DEFAULT}{R}\n",
+        "  {l}tuxixi update{r}           {s}Update binary + themes (hash based){r}\n"
+    ));
+    out.push_str(&format!(
+        "  {l}tuxixi update --self{r}    {s}Update the tuxixi binary itself{r}\n"
+    ));
+    out.push_str(&format!(
+        "  {l}tuxixi update --theme{r}   {s}Sync themes from the repository{r}\n"
+    ));
+    out.push_str(&format!(
+        "  {l}tuxixi update --check{r}   {s}Only show what would change{r}\n\n"
+    ));
+
+    out.push_str(&format!("{b}{c}THEMES{r}\n"));
+    out.push_str(&format!(
+        "  {s}32 built-in themes (the real upstream files), default: {DEFAULT}{r}\n",
         DEFAULT = crate::theme::DEFAULT_THEME
     ));
     out.push_str(&format!(
-        "  {L}tuxixi theme list{R}       {S}Show all themes (current one marked){R}\n"
+        "  {l}tuxixi theme list{r}       {s}Show all themes (current one marked){r}\n"
     ));
     out.push_str(&format!(
-        "  {L}tuxixi theme set <name>{R} {S}Switch the theme{R}\n"
+        "  {l}tuxixi theme set <name>{r} {s}Switch the theme{r}\n"
     ));
     out.push_str(&format!(
-        "  {L}tuxixi theme next{R}       {S}Cycle to the next theme{R}\n"
+        "  {l}tuxixi theme next{r}       {s}Cycle to the next theme{r}\n"
     ));
     out.push_str(&format!(
-        "  {L}Ctrl+Shift+T{R}            {S}Cycle theme inside TUXIXI{R}\n"
+        "  {l}Ctrl+Shift+T{r}            {s}Cycle theme inside TUXIXI{r}\n"
     ));
     out.push_str(&format!(
-        "  {S}Drop your own themes (JSON / iTerm2 .itermcolors / Alacritty{R}\n"
+        "  {s}Drop your own themes (JSON / iTerm2 .itermcolors / Alacritty{r}\n"
     ));
-    out.push_str(&format!("  {S}.toml/.yml / kitty .conf) into:{R}\n"));
+    out.push_str(&format!("  {s}.toml/.yml / kitty .conf) into:{r}\n"));
     out.push_str(&format!(
-        "  {L}~/.config/tuxixi/themes/{R}   {S}(a cloned theme repo works too){R}\n\n"
+        "  {l}~/.config/tuxixi/themes/{r}   {s}(a cloned theme repo works too){r}\n\n"
     ));
 
-    out.push_str(&format!("{B}{C}UTILITIES{R}\n"));
+    out.push_str(&format!("{b}{c}UTILITIES{r}\n"));
     out.push_str(&format!(
-        "  {L}ll{R}                 {S}List directory contents{R}\n"
+        "  {l}ll{r}                 {s}List directory contents{r}\n"
     ));
     out.push_str(&format!(
-        "  {L}cls{R}                {S}Clear terminal{R}\n\n"
-    ));
-
-    out.push_str(&format!("{B}{C}KEYBOARD SHORTCUTS{R}\n"));
-    out.push_str(&format!(
-        "  {A}Ctrl+Shift+C{R}       {S}Copy selection{R}\n"
-    ));
-    out.push_str(&format!("  {A}Ctrl+Shift+V{R}       {S}Paste cleanly{R}\n"));
-    out.push_str(&format!(
-        "  {A}Ctrl+Shift+T{R}       {S}Change theme (live){R}\n"
-    ));
-    out.push_str(&format!(
-        "  {A}Ctrl+Shift+G{R}       {S}Toggle glass blur{R}\n"
-    ));
-    out.push_str(&format!(
-        "  {A}Ctrl+{R}={A}/{R}- {S}       {S}Increase / decrease font size{R}\n"
-    ));
-    out.push_str(&format!(
-        "  {A}Shift+PageUp/Down{R}  {S}Scroll the scrollback{R}\n"
-    ));
-    out.push_str(&format!(
-        "  {A}Mouse wheel{R}        {S}Scroll the scrollback{R}\n"
-    ));
-    out.push_str(&format!(
-        "  {A}Mouse drag{R}         {S}Select text (release to keep){R}\n\n"
+        "  {l}cls{r}                {s}Clear terminal{r}\n\n"
     ));
 
-    out.push_str(&format!("{P}◆{R} {S}Built for terminal enthusiasts{R}\n\n"));
+    out.push_str(&format!("{b}{c}KEYBOARD SHORTCUTS{r}\n"));
+    out.push_str(&format!(
+        "  {a}Ctrl+Shift+c{r}       {s}Copy selection{r}\n"
+    ));
+    out.push_str(&format!("  {a}Ctrl+Shift+V{r}       {s}Paste cleanly{r}\n"));
+    out.push_str(&format!(
+        "  {a}Ctrl+Shift+T{r}       {s}Change theme (live){r}\n"
+    ));
+    out.push_str(&format!(
+        "  {a}Ctrl+Shift+G{r}       {s}Toggle glass blur{r}\n"
+    ));
+    out.push_str(&format!(
+        "  {a}Ctrl+{r}={a}/{r}- {s}       {s}Increase / decrease font size{r}\n"
+    ));
+    out.push_str(&format!(
+        "  {a}Shift+PageUp/Down{r}  {s}Scroll the scrollback{r}\n"
+    ));
+    out.push_str(&format!(
+        "  {a}Mouse wheel{r}        {s}Scroll the scrollback{r}\n"
+    ));
+    out.push_str(&format!(
+        "  {a}Mouse drag{r}         {s}Select text (release to keep){r}\n\n"
+    ));
+
+    out.push_str(&format!("{p}◆{r} {s}Built for terminal enthusiasts{r}\n\n"));
     out
 }
 

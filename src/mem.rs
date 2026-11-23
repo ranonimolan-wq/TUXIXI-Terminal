@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0
+// Copyright (c) 2026 ranonimolan-wq / TUXIXI. All rights reserved.
+
 //! Manual memory management helpers for the winit GUI.
 //!
 //! TUXIXI no longer sits on top of GLib/GTK, whose allocators and

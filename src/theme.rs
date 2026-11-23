@@ -69,6 +69,38 @@ pub const SMOKY_ALPHA: f64 = 0.87;
 /// cannot be parsed at all.
 pub const GLASS_FALLBACK_FG: &str = "#F8FAFC";
 
+/// Classic xterm 0-15 RGB values. They back-fill the ANSI palette of
+/// themes that ship without one (or with fewer than 16 entries), so the
+/// renderer always receives a full 16-slot palette.
+pub const STANDARD_ANSI_16: [&str; 16] = [
+    "#000000", "#CD0000", "#00CD00", "#CDCD00",
+    "#0000EE", "#CD00CD", "#00CDCD", "#E5E5E5",
+    "#7F7F7F", "#FF0000", "#00FF00", "#FFFF00",
+    "#5C5CFF", "#FF00FF", "#00FFFF", "#FFFFFF",
+];
+
+/// The standard base color for ANSI slot `i`. Out-of-range indexes
+/// clamp to white so a bad slot can never crash the renderer.
+pub fn standard_ansi(i: usize) -> Rgba {
+    Rgba::opaque(STANDARD_ANSI_16.get(i).copied().unwrap_or("#FFFFFF"))
+}
+
+/// A full 16-entry ANSI palette for `theme`: the standard xterm base
+/// with the theme's own entries overlaid on top. A theme may legally
+/// ship zero palette entries (a bare JSON file with only
+/// background/foreground — including user files that override a
+/// built-in of the same name); those must render with usable colors,
+/// never panic. Unparsable entries also fall back to the base.
+pub fn resolve_palette(theme: &Theme) -> Vec<Rgba> {
+    let mut palette: Vec<Rgba> = (0..16).map(standard_ansi).collect();
+    for (i, hex) in theme.palette.iter().enumerate().take(16) {
+        if let Some(c) = Rgba::parse_hex(hex) {
+            palette[i] = c;
+        }
+    }
+    palette
+}
+
 /// How deep the user themes directory is scanned (so a whole cloned
 /// theme repository works; `~/.config/tuxixi/themes/<repo>/<file>`).
 pub const MAX_SCAN_DEPTH: usize = 4;
@@ -381,7 +413,7 @@ pub fn terminal_colors(theme_name: &str, transparent: bool, blur_mode: &str) -> 
         background,
         foreground,
         cursor: Rgba::opaque(&theme.cursor),
-        palette: theme.palette.iter().filter_map(|c| Rgba::parse_hex(c)).collect(),
+        palette: resolve_palette(theme),
     }
 }
 
@@ -722,5 +754,124 @@ mod tests {
         let b = terminal_colors("Nord", false, "off");
         assert_ne!(a.background, b.background, "themes must paint different backgrounds");
         assert_eq!(a.palette.len(), b.palette.len());
+    }
+
+    // ---- regression tests: palettless themes must never crash ----
+
+    fn bare_theme(name: &str) -> Theme {
+        Theme {
+            name: name.to_string(),
+            background: "#1A1B26".to_string(),
+            foreground: "#C0CAF5".to_string(),
+            cursor: "#C0CAF5".to_string(),
+            palette: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn resolve_palette_gives_sixteen_slots_for_a_paletteless_theme() {
+        // The reported startup crash: a user theme JSON with only
+        // background/foreground (no palette) reached the renderer as a
+        // zero-length palette. Resolution must always produce 16 slots.
+        let resolved = resolve_palette(&bare_theme("Bare"));
+        assert_eq!(resolved.len(), 16);
+        for (i, entry) in resolved.iter().enumerate() {
+            assert_eq!(*entry, standard_ansi(i), "slot {i} must be the standard base");
+            assert_eq!(entry.a, 1.0, "slot {i} must be opaque");
+        }
+    }
+
+    #[test]
+    fn resolve_palette_overlays_a_partial_theme_on_the_standard_base() {
+        let mut t = bare_theme("Partial");
+        t.palette = vec!["#ABCDEF".to_string(), "#112233".to_string()];
+        let resolved = resolve_palette(&t);
+        assert_eq!(resolved.len(), 16);
+        assert_eq!(resolved[0], Rgba::opaque("#ABCDEF"));
+        assert_eq!(resolved[1], Rgba::opaque("#112233"));
+        assert_eq!(resolved[2], standard_ansi(2), "missing slot 2 keeps the base");
+        assert_eq!(resolved[15], standard_ansi(15), "missing slot 15 keeps the base");
+    }
+
+    #[test]
+    fn resolve_palette_skips_unparsable_entries() {
+        let mut t = bare_theme("Garbage");
+        t.palette = vec!["#GGGGGG".to_string(), "#0000FF".to_string()];
+        let resolved = resolve_palette(&t);
+        assert_eq!(resolved.len(), 16);
+        assert_eq!(resolved[0], standard_ansi(0), "garbage entry keeps the base");
+        assert_eq!(resolved[1], Rgba::opaque("#0000FF"));
+    }
+
+    #[test]
+    fn resolve_palette_ignores_extra_entries_beyond_sixteen() {
+        // Theme::from_json rejects >16, but resolve_palette must stay
+        // safe even if a theme object is built programmatically.
+        let mut t = bare_theme("TooMany");
+        t.palette = vec!["#ABCDEF".to_string(); 20];
+        let resolved = resolve_palette(&t);
+        assert_eq!(resolved.len(), 16);
+    }
+
+    #[test]
+    fn terminal_colors_always_yields_sixteen_palette_entries() {
+        let reg = Registry::builtin();
+        for name in reg.names() {
+            let c = terminal_colors(&name, false, "off");
+            assert_eq!(c.palette.len(), 16, "{name}");
+        }
+    }
+
+    #[test]
+    fn palettless_user_override_survives_the_full_color_pipeline() {
+        // The exact user scenario: a palettless Dracula.json in the
+        // user themes dir overrides the built-in, the app starts with
+        // that theme selected, and the renderer palette is built from
+        // it. End-to-end, this must produce a usable 16-slot palette.
+        let dir = temp_theme_dir("palettless");
+        std::fs::write(
+            dir.join("Dracula.json"),
+            r##"{"name": "Dracula", "background": "#123456", "foreground": "#654321"}"##,
+        )
+        .unwrap();
+        let reg = Registry::load(Some(&dir));
+        let theme = reg.get("Dracula").unwrap();
+        assert!(theme.palette.is_empty(), "fixture sanity: no palette in the file");
+
+        let resolved = resolve_palette(theme);
+        assert_eq!(resolved.len(), 16);
+
+        let colors = TerminalColors {
+            background: Rgba::opaque(&theme.background),
+            foreground: Rgba::opaque(&theme.foreground),
+            cursor: Rgba::opaque(&theme.cursor),
+            palette: resolved,
+        };
+        // The exact call that used to panic (render.rs:30).
+        #[cfg(feature = "gui")]
+        {
+            let palette = crate::render::Palette::from_terminal_colors(&colors);
+            assert_eq!(palette.ansi.len(), 16);
+            assert_eq!(palette.background, [0x12, 0x34, 0x56]);
+            assert_eq!(palette.foreground, [0x65, 0x43, 0x21]);
+            assert_eq!(palette.ansi[1], [0xCD, 0x00, 0x00], "standard red fallback");
+        }
+        let _ = colors; // silence unused warning in CLI-only test builds
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn standard_ansi_table_is_valid_and_distinct() {
+        assert_eq!(STANDARD_ANSI_16.len(), 16);
+        for (i, hex) in STANDARD_ANSI_16.iter().enumerate() {
+            let c = Rgba::parse_hex(hex)
+                .unwrap_or_else(|| panic!("STANDARD_ANSI_16[{i}] = {hex} is not a valid hex"));
+            assert_eq!(c.a, 1.0);
+        }
+        let unique: std::collections::HashSet<_> = STANDARD_ANSI_16.iter().collect();
+        assert_eq!(unique.len(), 16, "standard ANSI colors must be distinct");
+        // Out-of-range index clamps instead of panicking.
+        assert_eq!(standard_ansi(16), standard_ansi(15));
+        assert_eq!(standard_ansi(9999), standard_ansi(15));
     }
 }

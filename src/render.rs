@@ -23,13 +23,24 @@ pub struct Palette {
 
 impl Palette {
     /// Build from the theme pipeline (`theme::terminal_colors`).
+    ///
+    /// A theme may ship fewer than 16 palette entries (or none at all),
+    /// so missing slots fall back to the standard xterm colors instead
+    /// of panicking. Regression: a palettless user theme overriding a
+    /// built-in used to crash here at startup with
+    /// "index out of bounds: the len is 0 but the index is 0".
     pub fn from_terminal_colors(colors: &crate::theme::TerminalColors) -> Self {
         let mut ansi = [[0u8; 3]; 16];
         for (i, slot) in ansi.iter_mut().enumerate() {
+            let c = colors
+                .palette
+                .get(i)
+                .copied()
+                .unwrap_or_else(|| crate::theme::standard_ansi(i));
             *slot = [
-                (colors.palette[i].r * 255.0).round() as u8,
-                (colors.palette[i].g * 255.0).round() as u8,
-                (colors.palette[i].b * 255.0).round() as u8,
+                (c.r * 255.0).round() as u8,
+                (c.g * 255.0).round() as u8,
+                (c.b * 255.0).round() as u8,
             ];
         }
         Self {
@@ -632,5 +643,79 @@ mod tests {
         // The bottom of a selected cell (no glyph ink there) must be
         // highlighted, not plain background.
         assert_ne!(with_sel[lh - 1], without[lh - 1]);
+    }
+
+    // ---- regression tests: palettless themes must never panic ----
+
+    fn term_colors_with_palette(palette: Vec<crate::theme::Rgba>) -> crate::theme::TerminalColors {
+        crate::theme::TerminalColors {
+            background: crate::theme::Rgba::opaque("#1A1B26"),
+            foreground: crate::theme::Rgba::opaque("#C0CAF5"),
+            cursor: crate::theme::Rgba::opaque("#C0CAF5"),
+            palette,
+        }
+    }
+
+    #[test]
+    fn from_terminal_colors_never_panics_on_an_empty_palette() {
+        // Exact regression for the reported startup crash:
+        // "index out of bounds: the len is 0 but the index is 0".
+        let colors = term_colors_with_palette(Vec::new());
+        let p = Palette::from_terminal_colors(&colors);
+        assert_eq!(p.ansi.len(), 16);
+        // Missing slots resolve to the standard xterm base colors.
+        assert_eq!(p.ansi[0], [0x00, 0x00, 0x00]); // black
+        assert_eq!(p.ansi[1], [0xCD, 0x00, 0x00]); // red
+        assert_eq!(p.ansi[2], [0x00, 0xCD, 0x00]); // green
+        assert_eq!(p.ansi[4], [0x00, 0x00, 0xEE]); // blue
+        assert_eq!(p.ansi[8], [0x7F, 0x7F, 0x7F]); // bright black
+        assert_eq!(p.ansi[15], [0xFF, 0xFF, 0xFF]); // bright white
+        // fg/bg/cursor still come through untouched.
+        assert_eq!(p.foreground, [0xC0, 0xCA, 0xF5]);
+        assert_eq!(p.background, [0x1A, 0x1B, 0x26]);
+    }
+
+    #[test]
+    fn from_terminal_colors_fills_a_partial_palette() {
+        // A theme with a single palette entry: slot 0 is custom, the
+        // rest are the standard base.
+        let colors = term_colors_with_palette(vec![crate::theme::Rgba::opaque("#ABCDEF")]);
+        let p = Palette::from_terminal_colors(&colors);
+        assert_eq!(p.ansi[0], [0xAB, 0xCD, 0xEF]);
+        assert_eq!(p.ansi[1], [0xCD, 0x00, 0x00], "slot 1 falls back to standard red");
+        assert_eq!(p.ansi[15], [0xFF, 0xFF, 0xFF], "slot 15 falls back to standard white");
+    }
+
+    #[test]
+    fn from_terminal_colors_converts_a_full_palette_exactly() {
+        let colors = term_colors_with_palette(
+            crate::theme::STANDARD_ANSI_16
+                .iter()
+                .map(|h| crate::theme::Rgba::opaque(h))
+                .collect(),
+        );
+        let p = Palette::from_terminal_colors(&colors);
+        for (i, hex) in crate::theme::STANDARD_ANSI_16.iter().enumerate() {
+            let expected = crate::theme::Rgba::opaque(hex);
+            let want = [
+                (expected.r * 255.0).round() as u8,
+                (expected.g * 255.0).round() as u8,
+                (expected.b * 255.0).round() as u8,
+            ];
+            assert_eq!(p.ansi[i], want, "slot {i}");
+        }
+    }
+
+    #[test]
+    fn every_builtin_theme_converts_without_panicking() {
+        // The exact startup path of gui.rs::palette_from_settings run
+        // for every built-in theme: the conversion itself must never
+        // panic, whatever the registry contains.
+        let reg = crate::theme::Registry::builtin();
+        for name in reg.names() {
+            let colors = crate::theme::terminal_colors(&name, false, "off");
+            let p = Palette::from_terminal_colors(&colors);
+            assert_eq!(p.ansi.len(), 16, "{name}");
+        }
     }
 }

@@ -422,10 +422,16 @@ pub fn clear_color(palette: &Palette, glass: GlassParams) -> [f32; 4] {
 }
 
 // ---------------------------------------------------------------------------
-// Shaders (GLSL 330 core)
+// Shaders — written once, compiled for BOTH desktop GL 3.3 core and
+// OpenGL ES 3.0 (the only per-context difference is the header: ES
+// needs `#version 300 es` + an explicit precision qualifier, desktop
+// needs `#version 330 core`). Old Intel GPUs (i915/gen3) have no core
+// profile at all and answer `EGL_BAD_MATCH` to every desktop GL 3.3
+// request — ES 3.0 is their only modern context (same fallback
+// alacritty uses), so the renderer must speak both dialects.
 // ---------------------------------------------------------------------------
 
-pub const RECT_VERTEX_SHADER: &str = r#"#version 330 core
+pub const RECT_VERTEX_SHADER_BODY: &str = r#"
 layout (location = 0) in vec2 a_pos;   // window pixels, y downward
 layout (location = 1) in vec4 a_color; // straight RGBA
 
@@ -441,7 +447,7 @@ void main() {
 }
 "#;
 
-pub const RECT_FRAGMENT_SHADER: &str = r#"#version 330 core
+pub const RECT_FRAGMENT_SHADER_BODY: &str = r#"
 in vec4 v_color;
 
 out vec4 out_color;
@@ -451,7 +457,7 @@ void main() {
 }
 "#;
 
-pub const GLYPH_VERTEX_SHADER: &str = r#"#version 330 core
+pub const GLYPH_VERTEX_SHADER_BODY: &str = r#"
 layout (location = 0) in vec2 a_pos;   // window pixels, y downward
 layout (location = 1) in vec2 a_uv;    // atlas uv
 layout (location = 2) in vec4 a_color; // straight RGBA
@@ -470,7 +476,7 @@ void main() {
 }
 "#;
 
-pub const GLYPH_FRAGMENT_SHADER: &str = r#"#version 330 core
+pub const GLYPH_FRAGMENT_SHADER_BODY: &str = r#"
 in vec2 v_uv;
 in vec4 v_color;
 
@@ -483,6 +489,19 @@ void main() {
     out_color = vec4(v_color.rgb, v_color.a * coverage);
 }
 "#;
+
+/// Build the full shader source for the context's GL flavor.
+///
+/// ES needs `#version 300 es` + an explicit precision qualifier
+/// (`highp` is mandatory in ES 3.0 fragment shaders, so it is safe in
+/// every stage); desktop GLSL 330 core rejects the ES headers.
+fn shader_source(body: &str, is_embedded: bool) -> String {
+    if is_embedded {
+        format!("#version 300 es\nprecision highp float;\n{body}")
+    } else {
+        format!("#version 330 core\n{body}")
+    }
+}
 
 // ---------------------------------------------------------------------------
 // GL layer (thin, no policy)
@@ -512,6 +531,13 @@ pub struct GpuRenderer {
 impl GpuRenderer {
     pub fn new(gl: std::sync::Arc<glow::Context>) -> Result<Self, String> {
         unsafe {
+            // ES contexts report an embedded version string ("OpenGL ES
+            // 3.x"); the shaders need the ES header for those.
+            let is_embedded = gl.version().is_embedded;
+            eprintln!(
+                "GPU renderer: {} mode",
+                if is_embedded { "OpenGL ES 3.0" } else { "desktop OpenGL 3.3" }
+            );
             let compile = |src: &str, kind: u32, label: &str| -> Result<glow::Shader, String> {
                 let shader = gl
                     .create_shader(kind)
@@ -544,18 +570,26 @@ impl GpuRenderer {
             };
 
             let rect_program = link(
-                compile(RECT_VERTEX_SHADER, glow::VERTEX_SHADER, "tuxixi-rect-vs")?,
                 compile(
-                    RECT_FRAGMENT_SHADER,
+                    &shader_source(RECT_VERTEX_SHADER_BODY, is_embedded),
+                    glow::VERTEX_SHADER,
+                    "tuxixi-rect-vs",
+                )?,
+                compile(
+                    &shader_source(RECT_FRAGMENT_SHADER_BODY, is_embedded),
                     glow::FRAGMENT_SHADER,
                     "tuxixi-rect-fs",
                 )?,
                 "tuxixi-rect-program",
             )?;
             let glyph_program = link(
-                compile(GLYPH_VERTEX_SHADER, glow::VERTEX_SHADER, "tuxixi-glyph-vs")?,
                 compile(
-                    GLYPH_FRAGMENT_SHADER,
+                    &shader_source(GLYPH_VERTEX_SHADER_BODY, is_embedded),
+                    glow::VERTEX_SHADER,
+                    "tuxixi-glyph-vs",
+                )?,
+                compile(
+                    &shader_source(GLYPH_FRAGMENT_SHADER_BODY, is_embedded),
                     glow::FRAGMENT_SHADER,
                     "tuxixi-glyph-fs",
                 )?,
@@ -808,6 +842,56 @@ mod tests {
             background: [10, 20, 30],
             cursor: [255, 255, 0],
         }
+    }
+
+    // ----- shader source dialects -----
+
+    #[test]
+    fn desktop_shader_source_gets_the_330_core_header() {
+        let src = shader_source("void main() {}\n", false);
+        assert!(src.starts_with("#version 330 core\n"));
+        assert!(
+            !src.contains("precision"),
+            "desktop GLSL must not carry ES precision qualifiers"
+        );
+        assert!(src.contains("void main() {}"), "body must be kept");
+    }
+
+    #[test]
+    fn es_shader_source_gets_the_300_es_header_and_precision() {
+        let src = shader_source("void main() {}\n", true);
+        assert!(src.starts_with("#version 300 es\n"));
+        assert!(
+            src.contains("precision highp float;"),
+            "ES 3.0 fragment shaders need an explicit precision qualifier"
+        );
+        assert!(src.contains("void main() {}"), "body must be kept");
+        assert!(
+            !src.contains("330 core"),
+            "ES source must never claim the desktop profile"
+        );
+    }
+
+    #[test]
+    fn es_headers_cover_every_shader_body_without_desktop_only_syntax() {
+        // All four shader bodies must survive both dialects with the
+        // desktop-only constructs absent: `layout(location)` and
+        // `texture()` are valid in both 330 core and 300 es, so the
+        // only thing that may differ is the header.
+        for (body, name) in [
+            (RECT_VERTEX_SHADER_BODY, "rect-vs"),
+            (RECT_FRAGMENT_SHADER_BODY, "rect-fs"),
+            (GLYPH_VERTEX_SHADER_BODY, "glyph-vs"),
+            (GLYPH_FRAGMENT_SHADER_BODY, "glyph-fs"),
+        ] {
+            assert!(!body.contains("#version"), "{name}: version in body");
+            assert!(!body.contains("precision"), "{name}: precision in body");
+            assert!(body.contains("in "), "{name}: inputs missing");
+        }
+        // The ES fragment shaders write to a user-defined `out` (ES 3.0
+        // requirement, same as desktop core).
+        assert!(RECT_FRAGMENT_SHADER_BODY.contains("out vec4"));
+        assert!(GLYPH_FRAGMENT_SHADER_BODY.contains("out vec4"));
     }
 
     // ----- atlas packer -----

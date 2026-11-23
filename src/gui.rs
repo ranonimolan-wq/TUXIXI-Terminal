@@ -40,6 +40,7 @@ use glutin::surface::{GlSurface, Surface as GlutinSurface, WindowSurface};
 use glutin_winit::DisplayBuilder;
 use raw_window_handle::HasWindowHandle;
 use std::num::NonZeroU32;
+use std::os::unix::process::CommandExt;
 use std::sync::Arc;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -105,53 +106,113 @@ impl GlBackend {
 /// * [`GlApi::Glx`] — the classic X11 path (GLX first, EGL as a
 ///   display-level fallback), kept as a safety net for setups where
 ///   EGL is broken or libEGL is missing.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum GlApi {
     Egl,
     Glx,
 }
 
+/// Which GL context flavor a rung requests.
+///
+/// * [`GlProfile::Desktop`] — OpenGL 3.3 core, the renderer's native
+///   target (VAOs, R8 atlas, `#version 330 core` shaders).
+/// * [`GlProfile::Es3`] — OpenGL ES 3.0. Old Intel GPUs (i915/gen3,
+///   e.g. the G31/G33) have NO core profile: the driver tops out at
+///   GL 2.1 and answers `EGL_BAD_MATCH` (0x3009 = 12297) to every
+///   desktop GL 3.3 request. Their only modern context is ES 3.0 —
+///   the same fallback alacritty uses. The renderer's shaders compile
+///   for both dialects (see `shader_source` in `crate::gpu`).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum GlProfile {
+    Desktop,
+    Es3,
+}
+
 /// The GL initialization ladder: (transparent window, alpha size, GL
-/// API, description). Tried top to bottom — EGL + glass-capable
-/// first (the combination that works on the most systems), then the
-/// relaxed EGL configurations, then the same set through GLX.
-const GL_INIT_LADDER: [(bool, u8, GlApi, &str); 6] = [
+/// API, context profile, description). Tried top to bottom: EGL
+/// desktop GL first (glass-capable rung first), then EGL ES 3.0 (the
+/// old-Intel path), then desktop GL through GLX. ES is only tried
+/// through EGL — GLX has no ES concept.
+const GL_INIT_LADDER: [(bool, u8, GlApi, GlProfile, &str); 9] = [
     (
         true,
         8,
         GlApi::Egl,
-        "EGL: transparent window + 8-bit alpha config (glass capable)",
+        GlProfile::Desktop,
+        "EGL desktop GL 3.3: transparent window + 8-bit alpha (glass capable)",
     ),
     (
         false,
         8,
         GlApi::Egl,
-        "EGL: opaque window + 8-bit alpha config",
+        GlProfile::Desktop,
+        "EGL desktop GL 3.3: opaque window + 8-bit alpha",
     ),
     (
         false,
         0,
         GlApi::Egl,
-        "EGL: opaque window + no alpha requirement",
+        GlProfile::Desktop,
+        "EGL desktop GL 3.3: opaque window + no alpha requirement",
+    ),
+    (
+        true,
+        8,
+        GlApi::Egl,
+        GlProfile::Es3,
+        "EGL GLES 3.0: transparent window + 8-bit alpha (glass capable)",
+    ),
+    (
+        false,
+        8,
+        GlApi::Egl,
+        GlProfile::Es3,
+        "EGL GLES 3.0: opaque window + 8-bit alpha",
+    ),
+    (
+        false,
+        0,
+        GlApi::Egl,
+        GlProfile::Es3,
+        "EGL GLES 3.0: opaque window + no alpha requirement",
     ),
     (
         true,
         8,
         GlApi::Glx,
-        "GLX: transparent window + 8-bit alpha config (glass capable)",
+        GlProfile::Desktop,
+        "GLX desktop GL 3.3: transparent window + 8-bit alpha (glass capable)",
     ),
     (
         false,
         8,
         GlApi::Glx,
-        "GLX: opaque window + 8-bit alpha config",
+        GlProfile::Desktop,
+        "GLX desktop GL 3.3: opaque window + 8-bit alpha",
     ),
     (
         false,
         0,
         GlApi::Glx,
-        "GLX: opaque window + no alpha requirement",
+        GlProfile::Desktop,
+        "GLX desktop GL 3.3: opaque window + no alpha requirement",
     ),
+];
+
+/// The same rungs with GLES 3.0 first: the compatibility order for
+/// machines whose drivers cannot provide desktop GL 3.3 core (old
+/// Intel i915/gen3 GPUs answer `EGL_BAD_MATCH` to every core-profile
+/// request). Selected at runtime via `TUXIXI_GL_PREFER_ES=1`.
+const GL_INIT_LADDER_ES_FIRST: [(bool, u8, GlApi, GlProfile, &str); 9] = [
+    GL_INIT_LADDER[3],
+    GL_INIT_LADDER[4],
+    GL_INIT_LADDER[5],
+    GL_INIT_LADDER[0],
+    GL_INIT_LADDER[1],
+    GL_INIT_LADDER[2],
+    GL_INIT_LADDER[6],
+    GL_INIT_LADDER[7],
+    GL_INIT_LADDER[8],
 ];
 
 /// Everything one successful GL initialization produces: the window
@@ -201,15 +262,37 @@ impl App {
         transparent: bool,
         alpha_size: u8,
         api: GlApi,
+        profile: GlProfile,
     ) -> Result<CreatedGl, String> {
         let attrs = Window::default_attributes()
             .with_title("TUXIXI Terminal")
             .with_transparent(transparent)
             .with_inner_size(PhysicalSize::new(INITIAL_SIZE.0, INITIAL_SIZE.1));
 
+        // The API filter must match the requested context: EGL's
+        // template default includes only the GLES2 bit, and a config
+        // picked that way answers EGL_BAD_MATCH to a desktop context
+        // (and vice versa). Desktop rungs filter for OPENGL, ES rungs
+        // for GLES3.
+        let (api_bits, context_api) = match profile {
+            GlProfile::Desktop => (
+                glutin::config::Api::OPENGL,
+                glutin::context::ContextApi::OpenGl(Some(glutin::context::Version::new(
+                    3, 3,
+                ))),
+            ),
+            GlProfile::Es3 => (
+                glutin::config::Api::GLES3,
+                glutin::context::ContextApi::Gles(Some(glutin::context::Version::new(
+                    3, 0,
+                ))),
+            ),
+        };
+
         let template = ConfigTemplateBuilder::new()
             .with_alpha_size(alpha_size)
-            .with_transparency(transparent);
+            .with_transparency(transparent)
+            .with_api(api_bits);
 
         let preference = match api {
             GlApi::Egl => glutin_winit::ApiPreference::PreferEgl,
@@ -233,13 +316,12 @@ impl App {
             .map_err(|e| format!("window handle: {e}"))?
             .as_raw();
 
-        // OpenGL 3.3 core is the renderer's requirement (VAOs, instanced
-        // quads); asking explicitly makes the failure legible instead of
-        // silently handing back a legacy context the shaders can't use.
+        // OpenGL 3.3 core / GLES 3.0 is the renderer's requirement
+        // (VAOs, instanced-style geometry); asking explicitly makes
+        // the failure legible instead of silently handing back a
+        // legacy context the shaders can't use.
         let context_attrs = ContextAttributesBuilder::new()
-            .with_context_api(glutin::context::ContextApi::OpenGl(Some(
-                glutin::context::Version::new(3, 3),
-            )))
+            .with_context_api(context_api)
             .build(Some(raw_window));
         let surface_attrs = glutin::surface::SurfaceAttributesBuilder::<WindowSurface>::new()
             .build(
@@ -287,14 +369,16 @@ impl App {
     /// failure and the ladder moves on. The default panic hook is
     /// muted during the attempt so expected fallbacks don't print
     /// scary backtraces.
-    fn try_gl_ladder(el: &ActiveEventLoop, ladder: &[(bool, u8, GlApi, &str)]) -> Option<CreatedGl> {
-        for &(transparent, alpha, api, label) in ladder {
+    fn try_gl_ladder(
+        el: &ActiveEventLoop,
+        ladder: &[(bool, u8, GlApi, GlProfile, &str)],
+    ) -> Option<CreatedGl> {
+        for &(transparent, alpha, api, profile, label) in ladder {
             let prev_hook = std::panic::take_hook();
             std::panic::set_hook(Box::new(|_| {}));
-            let attempt =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    Self::create_gl_backend(el, transparent, alpha, api)
-                }));
+            let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Self::create_gl_backend(el, transparent, alpha, api, profile)
+            }));
             std::panic::set_hook(prev_hook);
             match attempt {
                 Ok(Ok(c)) => {
@@ -313,6 +397,28 @@ impl App {
             }
         }
         None
+    }
+
+    /// Re-exec this binary with Mesa forced to software rendering.
+    ///
+    /// `std::process::Command::exec` replaces the current process and
+    /// never returns on success; the `TUXIXI_GL_SOFTWARE` marker keeps
+    /// a second failure from looping forever. Returns only on failure
+    /// (so the caller can continue to the fatal report).
+    fn reexec_with_software_gl() {
+        if std::env::var_os("TUXIXI_GL_SOFTWARE").is_some() {
+            eprintln!("software-rendering retry already attempted — giving up");
+            return;
+        }
+        let Ok(exe) = std::env::current_exe() else {
+            eprintln!("cannot determine the binary path for the software-GL retry");
+            return;
+        };
+        let err = std::process::Command::new(exe)
+            .env("LIBGL_ALWAYS_SOFTWARE", "1")
+            .env("TUXIXI_GL_SOFTWARE", "1")
+            .exec();
+        eprintln!("software-rendering re-exec failed: {err}");
     }
 
     fn palette_from_settings(s: &Settings) -> Palette {
@@ -607,25 +713,37 @@ impl ApplicationHandler<PtyEvent> for App {
         // ones, EGL first and GLX second (see `GlApi` for why EGL must
         // come first: GLX BadMatch during context creation never
         // triggers libglvnd's EGL fallback on its own).
-        let mut created = Self::try_gl_ladder(el, &GL_INIT_LADDER);
+        // `TUXIXI_GL_PREFER_ES=1` flips GLES 3.0 to the front for
+        // machines whose drivers have no desktop core profile.
+        let ladder: &[(bool, u8, GlApi, GlProfile, &str)] = if
+            std::env::var_os("TUXIXI_GL_PREFER_ES").is_some()
+        {
+            &GL_INIT_LADDER_ES_FIRST
+        } else {
+            &GL_INIT_LADDER
+        };
+        let created = Self::try_gl_ladder(el, ladder);
 
-        // Last resort: force Mesa software rendering and try again.
-        // Mesa's EGL usually falls back to swrast automatically, but
-        // broken GLX vendor setups sometimes need the explicit hint,
+        // Last resort: Mesa caches the chosen driver PER PROCESS, so
+        // setting LIBGL_ALWAYS_SOFTWARE here cannot undo an already
+        // probed hardware driver. Instead re-exec the binary in a
+        // fresh process with the variable set: llvmpipe (the Mesa
+        // software rasterizer) provides desktop GL 3.3 on any CPU,
         // and a slow terminal beats a terminal that refuses to start.
-        if created.is_none() && std::env::var_os("LIBGL_ALWAYS_SOFTWARE").is_none() {
-            eprintln!("no configuration worked — retrying with forced software rendering (LIBGL_ALWAYS_SOFTWARE=1)");
-            std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
-            created = Self::try_gl_ladder(el, &GL_INIT_LADDER);
+        if created.is_none() {
+            eprintln!("no hardware configuration worked — retrying in a fresh process with software rendering (LIBGL_ALWAYS_SOFTWARE=1)");
+            Self::reexec_with_software_gl();
         }
         let CreatedGl { window, backend } = match created {
             Some(c) => c,
             None => {
                 eprintln!(
                     "fatal: no OpenGL configuration could be initialized.\n\
-                     Hints: install Mesa DRI drivers (libgl1-mesa-dri, libegl-mesa0, libegl1),\n\
-                     or force software rendering with LIBGL_ALWAYS_SOFTWARE=1 tuxixi.\n\
-                     If one API works but not the other, report the log lines above."
+                     Tried desktop OpenGL 3.3, OpenGL ES 3.0 and forced software rendering.\n\
+                     Hints: install/repair Mesa (libgl1-mesa-dri ships the software\n\
+                     renderer llvmpipe; libegl1 + libegl-mesa0 provide EGL),\n\
+                     and check that the compositor supports GLES (sway/wlroots does).\n\
+                     If one rung works but not the others, report the log lines above."
                 );
                 self.exiting_cleanup();
                 el.exit();
@@ -1083,7 +1201,7 @@ mod tests {
         assert!(!last.0, "last rung must not require transparency");
         assert_eq!(last.1, 0, "last rung must not require an alpha config");
         // Every rung has a human-readable label for the failure log.
-        for (_, _, _, label) in GL_INIT_LADDER {
+        for (_, _, _, _, label) in GL_INIT_LADDER {
             assert!(!label.is_empty());
         }
     }
@@ -1107,21 +1225,69 @@ mod tests {
     }
 
     #[test]
-    fn gl_ladder_covers_both_apis_for_every_config() {
+    fn gl_ladder_covers_both_apis_and_profiles_for_every_config() {
         // Every (transparent, alpha) configuration must be attempted
-        // through both APIs, so a machine with only one working API
-        // still finds a rung.
-        for api in [GlApi::Egl, GlApi::Glx] {
+        // through desktop GL on both APIs and through GLES 3.0 on EGL,
+        // so a machine with only one working API/profile still finds a
+        // rung (the old-Intel i915 path is EGL + GLES 3.0).
+        for (api, profile) in [
+            (GlApi::Egl, GlProfile::Desktop),
+            (GlApi::Egl, GlProfile::Es3),
+            (GlApi::Glx, GlProfile::Desktop),
+        ] {
             let configs: std::collections::HashSet<(bool, u8)> = GL_INIT_LADDER
                 .iter()
-                .filter(|r| r.2 == api)
+                .filter(|r| r.2 == api && r.3 == profile)
                 .map(|r| (r.0, r.1))
                 .collect();
-            assert!(configs.contains(&(true, 8)), "{api:?}: glass rung missing");
-            assert!(configs.contains(&(false, 8)), "{api:?}: alpha rung missing");
-            assert!(configs.contains(&(false, 0)), "{api:?}: plain rung missing");
-            assert_eq!(configs.len(), 3, "{api:?}: unexpected extra rungs");
+            assert!(
+                configs.contains(&(true, 8)),
+                "{api:?}/{profile:?}: glass rung missing"
+            );
+            assert!(
+                configs.contains(&(false, 8)),
+                "{api:?}/{profile:?}: alpha rung missing"
+            );
+            assert!(
+                configs.contains(&(false, 0)),
+                "{api:?}/{profile:?}: plain rung missing"
+            );
+            assert_eq!(
+                configs.len(),
+                3,
+                "{api:?}/{profile:?}: unexpected extra rungs"
+            );
         }
+    }
+
+    #[test]
+    fn es3_rungs_only_run_through_egl() {
+        // GLX has no OpenGL ES concept: an ES rung behind GLX would be
+        // a lie in the failure log and would fail after a pointless
+        // window/config attempt.
+        for rung in GL_INIT_LADDER {
+            assert!(
+                !(rung.2 == GlApi::Glx && rung.3 == GlProfile::Es3),
+                "ES rung must not use GLX: {rung:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn desktop_rungs_come_before_es3_rungs_on_the_same_api() {
+        // Desktop GL 3.3 is the higher-quality target (exact shaders,
+        // sRGB); ES 3.0 is the compatibility fallback, so it must not
+        // shadow desktop GL on the same API. On EGL, every desktop
+        // rung must precede every ES rung.
+        let egl_desktop_last = GL_INIT_LADDER
+            .iter()
+            .rposition(|r| r.2 == GlApi::Egl && r.3 == GlProfile::Desktop)
+            .expect("the ladder must contain EGL desktop rungs");
+        let egl_es_first = GL_INIT_LADDER
+            .iter()
+            .position(|r| r.2 == GlApi::Egl && r.3 == GlProfile::Es3)
+            .expect("the ladder must contain EGL ES rungs");
+        assert!(egl_desktop_last < egl_es_first, "desktop before ES on EGL");
     }
 
     #[test]
@@ -1138,17 +1304,21 @@ mod tests {
     }
 
     #[test]
-    fn gl_ladder_labels_name_their_api() {
-        // The failure log must tell the user WHICH API failed, so the
-        // "report the log lines above" hint is actionable.
-        for (_, _, api, label) in GL_INIT_LADDER {
-            let tag = match api {
-                GlApi::Egl => "EGL",
-                GlApi::Glx => "GLX",
+    fn gl_ladder_labels_name_their_api_and_profile() {
+        // The failure log must tell the user WHICH API/profile failed,
+        // so the "report the log lines above" hint is actionable.
+        for (_, _, api, profile, label) in GL_INIT_LADDER {
+            let prefix = match (api, profile) {
+                (GlApi::Egl, GlProfile::Desktop) => "EGL desktop GL 3.3",
+                (GlApi::Egl, GlProfile::Es3) => "EGL GLES 3.0",
+                (GlApi::Glx, GlProfile::Desktop) => "GLX desktop GL 3.3",
+                (GlApi::Glx, GlProfile::Es3) => {
+                    panic!("GLX must never request ES: {label}")
+                }
             };
             assert!(
-                label.starts_with(tag),
-                "label '{label}' must name its API '{tag}'"
+                label.starts_with(prefix),
+                "label '{label}' must name its API/profile '{prefix}'"
             );
         }
     }
@@ -1157,73 +1327,114 @@ mod tests {
     fn try_gl_ladder_reports_every_failure_and_stops_on_success() {
         // Drive try_gl_ladder's selection logic over a simulated
         // ladder: the first success wins and later rungs are skipped.
-        let rungs: [(bool, u8, GlApi, &str); 4] = [
-            (true, 8, GlApi::Egl, "EGL glass"),
-            (false, 8, GlApi::Egl, "EGL alpha"),
-            (true, 8, GlApi::Glx, "GLX glass"),
-            (false, 0, GlApi::Glx, "GLX plain"),
+        let rungs: [(bool, u8, GlApi, GlProfile, &str); 4] = [
+            (true, 8, GlApi::Egl, GlProfile::Desktop, "EGL desktop glass"),
+            (false, 8, GlApi::Egl, GlProfile::Desktop, "EGL desktop alpha"),
+            (false, 0, GlApi::Egl, GlProfile::Es3, "EGL es plain"),
+            (false, 0, GlApi::Glx, GlProfile::Desktop, "GLX plain"),
         ];
-        // Only the fully relaxed GLX rung "works" in this simulation.
-        let works = |r: &(bool, u8, GlApi, &str)| r.1 == 0 && !r.0;
+        // Only the ES rung "works" in this simulation (the old-Intel case).
+        let works = |r: &(bool, u8, GlApi, GlProfile, &str)| r.3 == GlProfile::Es3;
         let mut tried = Vec::new();
         let chosen = rungs
             .iter()
-            .inspect(|r| tried.push((r.2, r.3)))
+            .inspect(|r| tried.push((r.2, r.3, r.4)))
             .find(|&r| works(r))
-            .map(|r| (r.2, r.3));
-        assert_eq!(chosen, Some((GlApi::Glx, "GLX plain")));
+            .map(|r| (r.2, r.3, r.4));
+        assert_eq!(
+            chosen,
+            Some((GlApi::Egl, GlProfile::Es3, "EGL es plain")),
+            "the first working rung wins"
+        );
         assert_eq!(
             tried,
             vec![
-                (GlApi::Egl, "EGL glass"),
-                (GlApi::Egl, "EGL alpha"),
-                (GlApi::Glx, "GLX glass"),
-                (GlApi::Glx, "GLX plain"),
+                (GlApi::Egl, GlProfile::Desktop, "EGL desktop glass"),
+                (GlApi::Egl, GlProfile::Desktop, "EGL desktop alpha"),
+                (GlApi::Egl, GlProfile::Es3, "EGL es plain"),
             ],
             "every rung up to and including the success was tried"
         );
     }
 
     #[test]
-    fn software_rendering_retry_only_runs_once_and_respects_explicit_env() {
-        // The last-resort retry must not clobber an explicit user env
-        // var and must be expressible as a pure predicate.
-        let should_retry = |created: bool, env: Option<&str>| {
-            !created && env.is_none()
-        };
-        assert!(should_retry(false, None), "all failed + no env -> retry");
-        assert!(!should_retry(true, None), "success -> no retry");
-        assert!(!should_retry(false, Some("1")), "user env set -> respect it");
+    fn software_reexec_runs_once_and_never_loops() {
+        // The re-exec fallback is guarded by the TUXIXI_GL_SOFTWARE
+        // marker: a fresh process retried once, a process that was
+        // ALREADY the retry must give up instead of looping forever.
+        let should_reexec = |marker: Option<&str>| marker.is_none();
+        assert!(should_reexec(None), "first failure -> re-exec");
+        assert!(
+            !should_reexec(Some("1")),
+            "already inside the software retry -> give up"
+        );
     }
 
     #[test]
-    fn gl_ladder_rungs_are_monotonically_relaxed_within_each_api() {
+    fn gl_ladder_rungs_are_monotonically_relaxed_within_each_api_and_profile() {
         // Each rung must be at most as strict as the previous one WITHIN
-        // one API group: the alpha requirement never grows back and a
-        // dropped transparency requirement never returns. (The strictness
-        // legitimately restarts when the ladder switches from EGL to
-        // GLX — that is a new API, not a relaxation; the ordering is
-        // covered by gl_ladder_tries_egl_before_glx.)
+        // one API+profile group: the alpha requirement never grows back
+        // and a dropped transparency requirement never returns. (The
+        // strictness legitimately restarts when the ladder switches
+        // groups — e.g. EGL desktop -> EGL ES -> GLX desktop; those
+        // are new API flavors, not relaxations. Their ordering is
+        // covered by the dedicated ordering tests above.)
         for api in [GlApi::Egl, GlApi::Glx] {
-            let rungs: Vec<_> = GL_INIT_LADDER.iter().filter(|r| r.2 == api).collect();
-            for pair in rungs.windows(2) {
-                let (a, b) = (pair[0], pair[1]);
-                assert!(
-                    b.1 <= a.1,
-                    "{api:?}: alpha requirement must never grow: {a:?} -> {b:?}"
-                );
-                if !a.0 {
-                    assert!(
-                        !b.0,
-                        "{api:?}: transparency must never come back: {a:?} -> {b:?}"
-                    );
+            for profile in [GlProfile::Desktop, GlProfile::Es3] {
+                let rungs: Vec<_> = GL_INIT_LADDER
+                    .iter()
+                    .filter(|r| r.2 == api && r.3 == profile)
+                    .collect();
+                if rungs.is_empty() {
+                    continue; // GLX has no ES rungs
                 }
+                for pair in rungs.windows(2) {
+                    let (a, b) = (pair[0], pair[1]);
+                    assert!(
+                        b.1 <= a.1,
+                        "{api:?}/{profile:?}: alpha requirement must never grow: {a:?} -> {b:?}"
+                    );
+                    if !a.0 {
+                        assert!(
+                            !b.0,
+                            "{api:?}/{profile:?}: transparency must never come back: {a:?} -> {b:?}"
+                        );
+                    }
+                }
+                // Every group must end fully relaxed.
+                let last = rungs[rungs.len() - 1];
+                assert!(
+                    !last.0,
+                    "{api:?}/{profile:?}: last rung must not need transparency"
+                );
+                assert_eq!(
+                    last.1, 0,
+                    "{api:?}/{profile:?}: last rung must not need alpha"
+                );
             }
-            // Every API group must end fully relaxed.
-            let last = rungs[rungs.len() - 1];
-            assert!(!last.0, "{api:?}: last rung must not need transparency");
-            assert_eq!(last.1, 0, "{api:?}: last rung must not need alpha");
         }
+    }
+
+    #[test]
+    fn es_first_ladder_is_the_same_rungs_reordered() {
+        // TUXIXI_GL_PREFER_ES=1 must only change the ORDER, never the
+        // rung set: both orders cover the exact same configurations.
+        let mut normal: Vec<_> = GL_INIT_LADDER.iter().collect();
+        let mut es_first: Vec<_> = GL_INIT_LADDER_ES_FIRST.iter().collect();
+        normal.sort();
+        es_first.sort();
+        assert_eq!(normal, es_first, "same rungs, different order");
+        // And the reorder actually puts ES rungs first.
+        let es_prefix = GL_INIT_LADDER_ES_FIRST
+            .iter()
+            .take(3)
+            .all(|r| r.3 == GlProfile::Es3 && r.2 == GlApi::Egl);
+        assert!(es_prefix, "ES-first ladder starts with the EGL ES rungs");
+        assert_eq!(
+            GL_INIT_LADDER_ES_FIRST[3].3,
+            GlProfile::Desktop,
+            "desktop rungs follow the ES rungs"
+        );
     }
 
     #[test]

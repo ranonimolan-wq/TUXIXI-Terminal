@@ -94,9 +94,18 @@ fn comp_to_hex(components: [Option<f64>; 3]) -> Option<String> {
     match (r, g, b) {
         (Some(r), Some(g), Some(b)) => {
             // Plists store 0.0-1.0 floats; be tolerant of 0-255 scales.
-            let scale = if r > 1.0 || g > 1.0 || b > 1.0 { 255.0 } else { 1.0 };
+            let scale = if r > 1.0 || g > 1.0 || b > 1.0 {
+                255.0
+            } else {
+                1.0
+            };
             let to_byte = |v: f64| ((v / scale) * 255.0).round().clamp(0.0, 255.0) as u8;
-            Some(format!("#{:02X}{:02X}{:02X}", to_byte(r), to_byte(g), to_byte(b)))
+            Some(format!(
+                "#{:02X}{:02X}{:02X}",
+                to_byte(r),
+                to_byte(g),
+                to_byte(b)
+            ))
         }
         _ => None,
     }
@@ -145,7 +154,10 @@ pub fn parse_itermcolors(content: &str) -> Result<Theme, String> {
 
     for raw_line in content.lines() {
         let line = raw_line.trim();
-        if let Some(name) = line.strip_prefix("<key>").and_then(|l| l.strip_suffix("</key>")) {
+        if let Some(name) = line
+            .strip_prefix("<key>")
+            .and_then(|l| l.strip_suffix("</key>"))
+        {
             if let Some((_, slot)) = ITERM_KEYS.iter().find(|(k, _)| *k == name) {
                 flush_slot(&mut colors, &mut comps, current);
                 current = Some(*slot);
@@ -185,7 +197,12 @@ pub fn parse_itermcolors(content: &str) -> Result<Theme, String> {
     }
     flush_slot(&mut colors, &mut comps, current);
 
-    let take = |slot: Slot| colors.iter().find(|(s, _)| *s == slot).map(|(_, c)| c.clone());
+    let take = |slot: Slot| {
+        colors
+            .iter()
+            .find(|(s, _)| *s == slot)
+            .map(|(_, c)| c.clone())
+    };
     let background = take(Slot::Background)
         .ok_or_else(|| "itermcolors file has no Background Color".to_string())?;
     let foreground = take(Slot::Foreground)
@@ -208,7 +225,11 @@ pub fn parse_itermcolors(content: &str) -> Result<Theme, String> {
     })
 }
 
-fn flush_slot(colors: &mut Vec<(Slot, String)>, comps: &mut [Option<f64>; 3], current: Option<Slot>) {
+fn flush_slot(
+    colors: &mut Vec<(Slot, String)>,
+    comps: &mut [Option<f64>; 3],
+    current: Option<Slot>,
+) {
     if let Some(slot) = current {
         if let Some(hex) = comp_to_hex(*comps) {
             colors.push((slot, hex));
@@ -293,7 +314,9 @@ pub fn parse_alacritty_toml(content: &str) -> Result<Theme, String> {
 }
 
 fn ansi_index(key: &str) -> Option<usize> {
-    const NAMES: [&str; 8] = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"];
+    const NAMES: [&str; 8] = [
+        "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
+    ];
     NAMES.iter().position(|n| *n == key)
 }
 
@@ -318,12 +341,20 @@ fn strip_value(raw: &str) -> Option<String> {
     if let Some(inside) = raw.strip_prefix('"') {
         let end = inside.find('"')?;
         let value = inside[..end].trim();
-        return if value.is_empty() { None } else { Some(value.to_string()) };
+        return if value.is_empty() {
+            None
+        } else {
+            Some(value.to_string())
+        };
     }
     if let Some(inside) = raw.strip_prefix('\'') {
         let end = inside.find('\'')?;
         let value = inside[..end].trim();
-        return if value.is_empty() { None } else { Some(value.to_string()) };
+        return if value.is_empty() {
+            None
+        } else {
+            Some(value.to_string())
+        };
     }
     let value = raw.split('#').next().unwrap_or("").trim();
     if value.is_empty() {
@@ -479,7 +510,10 @@ mod tests {
         assert_eq!(name_from_stem("tokyo-night"), "Tokyo Night");
         assert_eq!(name_from_stem("nord"), "Nord");
         assert_eq!(name_from_stem("dracula"), "Dracula");
-        assert_eq!(name_from_stem("iTerm2-Solarized-Dark"), "iTerm2 Solarized Dark");
+        assert_eq!(
+            name_from_stem("iTerm2-Solarized-Dark"),
+            "iTerm2 Solarized Dark"
+        );
         assert_eq!(name_from_stem("GitHub-Dark"), "GitHub Dark");
     }
 

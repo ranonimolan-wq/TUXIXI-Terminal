@@ -7,10 +7,10 @@
 //! explicitly: the reader thread owns a fixed 64 KB buffer that lives
 //! exactly as long as the thread does.
 
-use std::os::unix::io::{AsRawFd, RawFd};
 use nix::pty::openpty;
-use std::os::unix::io::OwnedFd;
 use nix::unistd::{dup2, execvp, fork, setsid, ForkResult};
+use std::os::unix::io::OwnedFd;
+use std::os::unix::io::{AsRawFd, RawFd};
 
 /// Events forwarded from the PTY reader thread to the GUI loop.
 pub enum PtyEvent {
@@ -119,13 +119,7 @@ impl Pty {
             let Some(fd) = fd else { return };
             let mut buf = [0u8; 64 * 1024];
             loop {
-                let n = unsafe {
-                    libc::read(
-                        fd,
-                        buf.as_mut_ptr() as *mut libc::c_void,
-                        buf.len(),
-                    )
-                };
+                let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
                 if n > 0 {
                     sender(PtyEvent::Output(buf[..n as usize].to_vec()));
                 } else if n == 0 {
@@ -143,7 +137,9 @@ impl Pty {
     /// Write raw input bytes to the child (raw `libc::write`, see
     /// [`Pty::start_reader`] for why).
     pub fn write(&self, bytes: &[u8]) {
-        let Some(master) = self.master_fd_opt() else { return };
+        let Some(master) = self.master_fd_opt() else {
+            return;
+        };
         let mut written = 0;
         while written < bytes.len() {
             let n = unsafe {
@@ -155,8 +151,7 @@ impl Pty {
             };
             if n > 0 {
                 written += n as usize;
-            } else if n < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR)
-            {
+            } else if n < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
                 continue;
             } else {
                 break;
@@ -166,7 +161,9 @@ impl Pty {
 
     /// Tell the child about the new grid size (kernel sends SIGWINCH).
     pub fn resize(&self, cols: u16, rows: u16) {
-        let Some(master) = self.master_fd_opt() else { return };
+        let Some(master) = self.master_fd_opt() else {
+            return;
+        };
         let ws = libc::winsize {
             ws_col: cols,
             ws_row: rows,
@@ -198,7 +195,6 @@ pub fn kill_child() {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -244,7 +240,10 @@ mod tests {
         .expect("openpty");
         let rx = collect(&pty, Duration::from_secs(5));
         let out = recv_all(&rx, Duration::from_secs(5));
-        assert!(String::from_utf8_lossy(&out).contains("hello-pty"), "{out:?}");
+        assert!(
+            String::from_utf8_lossy(&out).contains("hello-pty"),
+            "{out:?}"
+        );
         pty.shutdown();
     }
 

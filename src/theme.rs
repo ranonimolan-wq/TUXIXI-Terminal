@@ -22,38 +22,134 @@ pub const DEFAULT_THEME: &str = "TokyoNight";
 /// `tuxixi update --theme`. The order defines the theme cycling
 /// sequence (Ctrl+Shift+T).
 pub const BUILTIN_FILES: &[(&str, &str)] = &[
-    ("upstream/Atom-One-Dark.itermcolors", include_str!("../themes/upstream/Atom-One-Dark.itermcolors")),
-    ("upstream/Atom-One-Light.itermcolors", include_str!("../themes/upstream/Atom-One-Light.itermcolors")),
-    ("upstream/Ayu-Mirage.itermcolors", include_str!("../themes/upstream/Ayu-Mirage.itermcolors")),
-    ("upstream/Ayu.itermcolors", include_str!("../themes/upstream/Ayu.itermcolors")),
-    ("upstream/Catppuccin-Frappe.itermcolors", include_str!("../themes/upstream/Catppuccin-Frappe.itermcolors")),
-    ("upstream/Catppuccin-Latte.itermcolors", include_str!("../themes/upstream/Catppuccin-Latte.itermcolors")),
-    ("upstream/Catppuccin-Macchiato.itermcolors", include_str!("../themes/upstream/Catppuccin-Macchiato.itermcolors")),
-    ("upstream/Catppuccin-Mocha.itermcolors", include_str!("../themes/upstream/Catppuccin-Mocha.itermcolors")),
-    ("upstream/Cyberpunk.itermcolors", include_str!("../themes/upstream/Cyberpunk.itermcolors")),
-    ("upstream/Dracula.itermcolors", include_str!("../themes/upstream/Dracula.itermcolors")),
-    ("upstream/Everforest-Dark-Med.itermcolors", include_str!("../themes/upstream/Everforest-Dark-Med.itermcolors")),
-    ("upstream/Flexoki-Dark.itermcolors", include_str!("../themes/upstream/Flexoki-Dark.itermcolors")),
-    ("upstream/Flexoki-Light.itermcolors", include_str!("../themes/upstream/Flexoki-Light.itermcolors")),
-    ("upstream/GitHub-Dark.itermcolors", include_str!("../themes/upstream/GitHub-Dark.itermcolors")),
-    ("upstream/Gruvbox-Dark.itermcolors", include_str!("../themes/upstream/Gruvbox-Dark.itermcolors")),
-    ("upstream/Gruvbox-Light.itermcolors", include_str!("../themes/upstream/Gruvbox-Light.itermcolors")),
-    ("upstream/Kanagawa-Wave.itermcolors", include_str!("../themes/upstream/Kanagawa-Wave.itermcolors")),
-    ("upstream/Monokai-Classic.itermcolors", include_str!("../themes/upstream/Monokai-Classic.itermcolors")),
-    ("upstream/Night-Owl.itermcolors", include_str!("../themes/upstream/Night-Owl.itermcolors")),
-    ("upstream/Nord.itermcolors", include_str!("../themes/upstream/Nord.itermcolors")),
-    ("upstream/One-Half-Dark.itermcolors", include_str!("../themes/upstream/One-Half-Dark.itermcolors")),
-    ("upstream/One-Half-Light.itermcolors", include_str!("../themes/upstream/One-Half-Light.itermcolors")),
-    ("upstream/Rose-Pine-Dawn.itermcolors", include_str!("../themes/upstream/Rose-Pine-Dawn.itermcolors")),
-    ("upstream/Rose-Pine-Moon.itermcolors", include_str!("../themes/upstream/Rose-Pine-Moon.itermcolors")),
-    ("upstream/Rose-Pine.itermcolors", include_str!("../themes/upstream/Rose-Pine.itermcolors")),
-    ("upstream/Synthwave.itermcolors", include_str!("../themes/upstream/Synthwave.itermcolors")),
-    ("upstream/TokyoNight-Day.itermcolors", include_str!("../themes/upstream/TokyoNight-Day.itermcolors")),
-    ("upstream/TokyoNight-Moon.itermcolors", include_str!("../themes/upstream/TokyoNight-Moon.itermcolors")),
-    ("upstream/TokyoNight-Storm.itermcolors", include_str!("../themes/upstream/TokyoNight-Storm.itermcolors")),
-    ("upstream/TokyoNight.itermcolors", include_str!("../themes/upstream/TokyoNight.itermcolors")),
-    ("upstream/iTerm2-Solarized-Dark.itermcolors", include_str!("../themes/upstream/iTerm2-Solarized-Dark.itermcolors")),
-    ("upstream/iTerm2-Solarized-Light.itermcolors", include_str!("../themes/upstream/iTerm2-Solarized-Light.itermcolors")),
+    (
+        "upstream/Atom-One-Dark.itermcolors",
+        include_str!("../themes/upstream/Atom-One-Dark.itermcolors"),
+    ),
+    (
+        "upstream/Atom-One-Light.itermcolors",
+        include_str!("../themes/upstream/Atom-One-Light.itermcolors"),
+    ),
+    (
+        "upstream/Ayu-Mirage.itermcolors",
+        include_str!("../themes/upstream/Ayu-Mirage.itermcolors"),
+    ),
+    (
+        "upstream/Ayu.itermcolors",
+        include_str!("../themes/upstream/Ayu.itermcolors"),
+    ),
+    (
+        "upstream/Catppuccin-Frappe.itermcolors",
+        include_str!("../themes/upstream/Catppuccin-Frappe.itermcolors"),
+    ),
+    (
+        "upstream/Catppuccin-Latte.itermcolors",
+        include_str!("../themes/upstream/Catppuccin-Latte.itermcolors"),
+    ),
+    (
+        "upstream/Catppuccin-Macchiato.itermcolors",
+        include_str!("../themes/upstream/Catppuccin-Macchiato.itermcolors"),
+    ),
+    (
+        "upstream/Catppuccin-Mocha.itermcolors",
+        include_str!("../themes/upstream/Catppuccin-Mocha.itermcolors"),
+    ),
+    (
+        "upstream/Cyberpunk.itermcolors",
+        include_str!("../themes/upstream/Cyberpunk.itermcolors"),
+    ),
+    (
+        "upstream/Dracula.itermcolors",
+        include_str!("../themes/upstream/Dracula.itermcolors"),
+    ),
+    (
+        "upstream/Everforest-Dark-Med.itermcolors",
+        include_str!("../themes/upstream/Everforest-Dark-Med.itermcolors"),
+    ),
+    (
+        "upstream/Flexoki-Dark.itermcolors",
+        include_str!("../themes/upstream/Flexoki-Dark.itermcolors"),
+    ),
+    (
+        "upstream/Flexoki-Light.itermcolors",
+        include_str!("../themes/upstream/Flexoki-Light.itermcolors"),
+    ),
+    (
+        "upstream/GitHub-Dark.itermcolors",
+        include_str!("../themes/upstream/GitHub-Dark.itermcolors"),
+    ),
+    (
+        "upstream/Gruvbox-Dark.itermcolors",
+        include_str!("../themes/upstream/Gruvbox-Dark.itermcolors"),
+    ),
+    (
+        "upstream/Gruvbox-Light.itermcolors",
+        include_str!("../themes/upstream/Gruvbox-Light.itermcolors"),
+    ),
+    (
+        "upstream/Kanagawa-Wave.itermcolors",
+        include_str!("../themes/upstream/Kanagawa-Wave.itermcolors"),
+    ),
+    (
+        "upstream/Monokai-Classic.itermcolors",
+        include_str!("../themes/upstream/Monokai-Classic.itermcolors"),
+    ),
+    (
+        "upstream/Night-Owl.itermcolors",
+        include_str!("../themes/upstream/Night-Owl.itermcolors"),
+    ),
+    (
+        "upstream/Nord.itermcolors",
+        include_str!("../themes/upstream/Nord.itermcolors"),
+    ),
+    (
+        "upstream/One-Half-Dark.itermcolors",
+        include_str!("../themes/upstream/One-Half-Dark.itermcolors"),
+    ),
+    (
+        "upstream/One-Half-Light.itermcolors",
+        include_str!("../themes/upstream/One-Half-Light.itermcolors"),
+    ),
+    (
+        "upstream/Rose-Pine-Dawn.itermcolors",
+        include_str!("../themes/upstream/Rose-Pine-Dawn.itermcolors"),
+    ),
+    (
+        "upstream/Rose-Pine-Moon.itermcolors",
+        include_str!("../themes/upstream/Rose-Pine-Moon.itermcolors"),
+    ),
+    (
+        "upstream/Rose-Pine.itermcolors",
+        include_str!("../themes/upstream/Rose-Pine.itermcolors"),
+    ),
+    (
+        "upstream/Synthwave.itermcolors",
+        include_str!("../themes/upstream/Synthwave.itermcolors"),
+    ),
+    (
+        "upstream/TokyoNight-Day.itermcolors",
+        include_str!("../themes/upstream/TokyoNight-Day.itermcolors"),
+    ),
+    (
+        "upstream/TokyoNight-Moon.itermcolors",
+        include_str!("../themes/upstream/TokyoNight-Moon.itermcolors"),
+    ),
+    (
+        "upstream/TokyoNight-Storm.itermcolors",
+        include_str!("../themes/upstream/TokyoNight-Storm.itermcolors"),
+    ),
+    (
+        "upstream/TokyoNight.itermcolors",
+        include_str!("../themes/upstream/TokyoNight.itermcolors"),
+    ),
+    (
+        "upstream/iTerm2-Solarized-Dark.itermcolors",
+        include_str!("../themes/upstream/iTerm2-Solarized-Dark.itermcolors"),
+    ),
+    (
+        "upstream/iTerm2-Solarized-Light.itermcolors",
+        include_str!("../themes/upstream/iTerm2-Solarized-Light.itermcolors"),
+    ),
 ];
 
 /// The embedded copy of `themes/manifest.json`: SHA-256 of every built-in
@@ -73,10 +169,8 @@ pub const GLASS_FALLBACK_FG: &str = "#F8FAFC";
 /// themes that ship without one (or with fewer than 16 entries), so the
 /// renderer always receives a full 16-slot palette.
 pub const STANDARD_ANSI_16: [&str; 16] = [
-    "#000000", "#CD0000", "#00CD00", "#CDCD00",
-    "#0000EE", "#CD00CD", "#00CDCD", "#E5E5E5",
-    "#7F7F7F", "#FF0000", "#00FF00", "#FFFF00",
-    "#5C5CFF", "#FF00FF", "#00FFFF", "#FFFFFF",
+    "#000000", "#CD0000", "#00CD00", "#CDCD00", "#0000EE", "#CD00CD", "#00CDCD", "#E5E5E5",
+    "#7F7F7F", "#FF0000", "#00FF00", "#FFFF00", "#5C5CFF", "#FF00FF", "#00FFFF", "#FFFFFF",
 ];
 
 /// The standard base color for ANSI slot `i`. Out-of-range indexes
@@ -131,8 +225,8 @@ fn validate_hex_field(field: &str, value: &str, theme: &str) -> Result<(), Strin
 impl Theme {
     /// Parse and validate one theme JSON string.
     pub fn from_json(json: &str) -> Result<Self, String> {
-        let mut theme: Theme = serde_json::from_str(json)
-            .map_err(|e| format!("invalid theme JSON: {e}"))?;
+        let mut theme: Theme =
+            serde_json::from_str(json).map_err(|e| format!("invalid theme JSON: {e}"))?;
         theme.name = theme.name.trim().to_string();
         if theme.name.is_empty() {
             return Err("theme name is empty".to_string());
@@ -289,8 +383,7 @@ impl Registry {
     /// The theme used for unknown names: the default theme when valid,
     /// otherwise the first built-in.
     pub fn fallback(&self) -> &Theme {
-        self.get(DEFAULT_THEME)
-            .unwrap_or_else(|| &self.themes[0])
+        self.get(DEFAULT_THEME).unwrap_or_else(|| &self.themes[0])
     }
 
     pub fn len(&self) -> usize {
@@ -321,10 +414,7 @@ fn collect_theme_files(dir: &Path, depth: usize) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return out;
     };
-    let mut paths: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .collect();
+    let mut paths: Vec<PathBuf> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
     paths.sort();
     for path in paths {
         let name = path
@@ -336,9 +426,10 @@ fn collect_theme_files(dir: &Path, depth: usize) -> Vec<PathBuf> {
         }
         if path.is_dir() {
             out.extend(collect_theme_files(&path, depth + 1));
-        } else if theme_formats::SUPPORTED_EXTENSIONS.iter().any(|ext| {
-            name.to_ascii_lowercase().ends_with(&format!(".{ext}"))
-        }) {
+        } else if theme_formats::SUPPORTED_EXTENSIONS
+            .iter()
+            .any(|ext| name.to_ascii_lowercase().ends_with(&format!(".{ext}")))
+        {
             out.push(path);
         }
     }
@@ -374,11 +465,14 @@ pub fn get_colors(theme_name: &str, transparent: bool, blur_mode: &str) -> (Rgba
     let reg = Registry::global();
     let theme = reg.get(theme_name).unwrap_or_else(|| reg.fallback());
     if glass {
-        let fg = Rgba::parse_hex(&theme.foreground)
-            .unwrap_or_else(|| Rgba::opaque(GLASS_FALLBACK_FG));
+        let fg =
+            Rgba::parse_hex(&theme.foreground).unwrap_or_else(|| Rgba::opaque(GLASS_FALLBACK_FG));
         (Rgba::black_transparent(), fg)
     } else {
-        (Rgba::opaque(&theme.background), Rgba::opaque(&theme.foreground))
+        (
+            Rgba::opaque(&theme.background),
+            Rgba::opaque(&theme.foreground),
+        )
     }
 }
 
@@ -752,7 +846,10 @@ mod tests {
     fn terminal_colors_differ_between_themes_so_switching_is_visible() {
         let a = terminal_colors("Dracula", false, "off");
         let b = terminal_colors("Nord", false, "off");
-        assert_ne!(a.background, b.background, "themes must paint different backgrounds");
+        assert_ne!(
+            a.background, b.background,
+            "themes must paint different backgrounds"
+        );
         assert_eq!(a.palette.len(), b.palette.len());
     }
 
@@ -776,7 +873,11 @@ mod tests {
         let resolved = resolve_palette(&bare_theme("Bare"));
         assert_eq!(resolved.len(), 16);
         for (i, entry) in resolved.iter().enumerate() {
-            assert_eq!(*entry, standard_ansi(i), "slot {i} must be the standard base");
+            assert_eq!(
+                *entry,
+                standard_ansi(i),
+                "slot {i} must be the standard base"
+            );
             assert_eq!(entry.a, 1.0, "slot {i} must be opaque");
         }
     }
@@ -789,8 +890,16 @@ mod tests {
         assert_eq!(resolved.len(), 16);
         assert_eq!(resolved[0], Rgba::opaque("#ABCDEF"));
         assert_eq!(resolved[1], Rgba::opaque("#112233"));
-        assert_eq!(resolved[2], standard_ansi(2), "missing slot 2 keeps the base");
-        assert_eq!(resolved[15], standard_ansi(15), "missing slot 15 keeps the base");
+        assert_eq!(
+            resolved[2],
+            standard_ansi(2),
+            "missing slot 2 keeps the base"
+        );
+        assert_eq!(
+            resolved[15],
+            standard_ansi(15),
+            "missing slot 15 keeps the base"
+        );
     }
 
     #[test]
@@ -799,7 +908,11 @@ mod tests {
         t.palette = vec!["#GGGGGG".to_string(), "#0000FF".to_string()];
         let resolved = resolve_palette(&t);
         assert_eq!(resolved.len(), 16);
-        assert_eq!(resolved[0], standard_ansi(0), "garbage entry keeps the base");
+        assert_eq!(
+            resolved[0],
+            standard_ansi(0),
+            "garbage entry keeps the base"
+        );
         assert_eq!(resolved[1], Rgba::opaque("#0000FF"));
     }
 
@@ -836,7 +949,10 @@ mod tests {
         .unwrap();
         let reg = Registry::load(Some(&dir));
         let theme = reg.get("Dracula").unwrap();
-        assert!(theme.palette.is_empty(), "fixture sanity: no palette in the file");
+        assert!(
+            theme.palette.is_empty(),
+            "fixture sanity: no palette in the file"
+        );
 
         let resolved = resolve_palette(theme);
         assert_eq!(resolved.len(), 16);

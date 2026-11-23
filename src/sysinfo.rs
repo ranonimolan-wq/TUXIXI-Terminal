@@ -129,7 +129,12 @@ fn parse_meminfo_field(line: &str, field: &str) -> Option<u64> {
 
 /// Disk usage from a statvfs-like tuple (total_blocks, free_blocks,
 /// available_blocks, block_size): "<used> / <total> (<pct>%)".
-pub fn disk_info(total_blocks: u64, free_blocks: u64, _avail_blocks: u64, block_size: u64) -> String {
+pub fn disk_info(
+    total_blocks: u64,
+    free_blocks: u64,
+    _avail_blocks: u64,
+    block_size: u64,
+) -> String {
     let total = total_blocks * block_size;
     let used = (total_blocks - free_blocks) * block_size;
     let pct = if total == 0 {
@@ -137,12 +142,7 @@ pub fn disk_info(total_blocks: u64, free_blocks: u64, _avail_blocks: u64, block_
     } else {
         (used as f64 / total as f64 * 100.0).round() as u64
     };
-    format!(
-        "{} / {} ({}%)",
-        human_size(used),
-        human_size(total),
-        pct
-    )
+    format!("{} / {} ({}%)", human_size(used), human_size(total), pct)
 }
 
 /// Real statvfs("/") wrapper for `disk_info`.
@@ -153,12 +153,7 @@ pub fn root_disk_info() -> Option<String> {
     if rc != 0 {
         return None;
     }
-    Some(disk_info(
-        fs.f_blocks,
-        fs.f_bfree,
-        fs.f_bavail,
-        fs.f_frsize,
-    ))
+    Some(disk_info(fs.f_blocks, fs.f_bfree, fs.f_bavail, fs.f_frsize))
 }
 
 /// Parse `ip -4 route get 1.1.1.1` output for the `src` and `dev` fields.
@@ -182,10 +177,10 @@ pub fn parse_ip_route(route_output: &str) -> (Option<String>, Option<String>) {
 
 pub fn format_sys(info: &SysInfo) -> String {
     let mut out = String::new();
+    out.push_str(&format!("\n{BOLD}{PURPLE}◆ SYSTEM STATUS{RESET}\n"));
     out.push_str(&format!(
-        "\n{BOLD}{PURPLE}◆ SYSTEM STATUS{RESET}\n"
+        "{SLATE}────────────────────────────────────────{RESET}\n\n"
     ));
-    out.push_str(&format!("{SLATE}────────────────────────────────────────{RESET}\n\n"));
     out.push_str(&kv("KERNEL", &info.kernel));
     out.push_str(&kv("UPTIME", &info.uptime));
     out.push_str(&kv("LOAD AVG", &info.load_avg));
@@ -199,16 +194,16 @@ pub fn format_sys(info: &SysInfo) -> String {
 
 pub fn format_ip(info: &IpInfo) -> String {
     let mut out = String::new();
+    out.push_str(&format!("\n{BOLD}{PURPLE}◆ NETWORK INFORMATION{RESET}\n"));
     out.push_str(&format!(
-        "\n{BOLD}{PURPLE}◆ NETWORK INFORMATION{RESET}\n"
+        "{SLATE}────────────────────────────────────────{RESET}\n\n"
     ));
-    out.push_str(&format!("{SLATE}────────────────────────────────────────{RESET}\n\n"));
 
     out.push_str(&format!("{CYAN}▸ INTERNAL IP{RESET}   "));
     match (&info.internal_ip, &info.iface) {
-        (Some(ip), Some(iface)) => out.push_str(&format!(
-            "{LIME}{ip}{RESET} {SLATE}({iface}){RESET}\n"
-        )),
+        (Some(ip), Some(iface)) => {
+            out.push_str(&format!("{LIME}{ip}{RESET} {SLATE}({iface}){RESET}\n"))
+        }
         (Some(ip), None) => out.push_str(&format!("{LIME}{ip}{RESET}\n")),
         (None, _) => out.push_str(&format!("{RED}Unavailable{RESET}\n")),
     }
@@ -396,7 +391,10 @@ mod tests {
     #[test]
     fn welcome_shows_the_rust_tag_in_red() {
         let w = format_welcome();
-        assert!(w.contains("(rust)"), "welcome must advertise the Rust rewrite");
+        assert!(
+            w.contains("(rust)"),
+            "welcome must advertise the Rust rewrite"
+        );
         // The tag is wrapped in the red ANSI color, not plain text.
         let tagged = format!("{RED}(rust){RESET}");
         assert!(w.contains(&tagged), "the (rust) tag must be red");

@@ -170,7 +170,10 @@ pub fn rasterize(font: &FontArc, c: char, px: f32) -> Option<GlyphBitmap> {
     };
     let outline = font.outline_glyph(glyph)?;
     let bounds = outline.px_bounds();
-    let (w, h) = (bounds.width().round() as usize, bounds.height().round() as usize);
+    let (w, h) = (
+        bounds.width().round() as usize,
+        bounds.height().round() as usize,
+    );
     if w == 0 || h == 0 {
         return None;
     }
@@ -231,9 +234,10 @@ fn variant_candidates(path: &str, style: &str) -> Vec<String> {
 /// Returns the regular face path plus the best-effort style variants.
 pub fn locate_font_files(family: &str) -> Option<(String, String, String, String)> {
     let regular = fc_match(family)?;
-    let bold = fc_match_bold(&regular).or_else(|| first_existing(&variant_candidates(&regular, "bold")));
-    let italic =
-        fc_match_italic(&regular).or_else(|| first_existing(&variant_candidates(&regular, "italic")));
+    let bold =
+        fc_match_bold(&regular).or_else(|| first_existing(&variant_candidates(&regular, "bold")));
+    let italic = fc_match_italic(&regular)
+        .or_else(|| first_existing(&variant_candidates(&regular, "italic")));
     let bold_italic = fc_match(&format!("{family}:bold:italic"))
         .or_else(|| first_existing(&variant_candidates(&regular, "bold_italic")));
     let regular2 = regular.clone();
@@ -306,8 +310,7 @@ pub fn load_face(
     px: f32,
 ) -> Result<FontFace, String> {
     let read = |p: &str| -> Result<FontArc, String> {
-        let data = std::fs::read(p)
-            .map_err(|e| format!("cannot read font {p}: {e}"))?;
+        let data = std::fs::read(p).map_err(|e| format!("cannot read font {p}: {e}"))?;
         FontArc::try_from_vec(data).map_err(|e| format!("cannot parse font {p}: {e}"))
     };
     let regular = read(regular_path)?;
@@ -447,10 +450,11 @@ mod tests {
 
     #[test]
     fn variant_candidates_cover_the_common_naming() {
-        let cands = variant_candidates("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", "bold");
-        assert!(cands
-            .iter()
-            .any(|p| p.ends_with("DejaVuSansMono-Bold.ttf")));
+        let cands = variant_candidates(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "bold",
+        );
+        assert!(cands.iter().any(|p| p.ends_with("DejaVuSansMono-Bold.ttf")));
         let cands = variant_candidates("/usr/share/fonts/truetype/freefont/FreeMono.ttf", "italic");
         assert!(cands.iter().any(|p| p.ends_with("FreeMono-Italic.ttf")));
     }
@@ -470,8 +474,8 @@ mod tests {
 
     #[test]
     fn load_face_reports_a_clear_error_for_missing_files() {
-        let err = load_face("/definitely/not/a/font.ttf", None, None, None, 14.0)
-            .expect_err("must fail");
+        let err =
+            load_face("/definitely/not/a/font.ttf", None, None, None, 14.0).expect_err("must fail");
         assert!(err.contains("cannot read font"));
     }
 

@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::theme::{theme_colors, BLUR_MODES, Registry, DEFAULT_THEME};
+use crate::theme::{theme_colors, Registry, BLUR_MODES, DEFAULT_THEME};
 
 pub const DEFAULT_FONT: &str = "Monospace";
 pub const DEFAULT_FONT_SIZE: u32 = 11;
@@ -166,17 +166,18 @@ impl Settings {
         // Legacy compatibility: {"blur": true} meant static blur.
         if (!matches!(obj.get("blur_mode"), Some(serde_json::Value::String(_)))
             || s.blur_mode == BlurMode::Off)
-            && obj.get("blur").and_then(|b| b.as_bool()) == Some(true) {
-                // Python only applies the legacy key when blur_mode itself
-                // was invalid; keep the same precedence.
-                let mode_invalid = match obj.get("blur_mode") {
-                    Some(serde_json::Value::String(m)) => BlurMode::from_str(m).is_none(),
-                    _ => true,
-                };
-                if mode_invalid {
-                    s.blur_mode = BlurMode::Static;
-                }
+            && obj.get("blur").and_then(|b| b.as_bool()) == Some(true)
+        {
+            // Python only applies the legacy key when blur_mode itself
+            // was invalid; keep the same precedence.
+            let mode_invalid = match obj.get("blur_mode") {
+                Some(serde_json::Value::String(m)) => BlurMode::from_str(m).is_none(),
+                _ => true,
+            };
+            if mode_invalid {
+                s.blur_mode = BlurMode::Static;
             }
+        }
 
         s
     }
@@ -384,9 +385,7 @@ fn tempfile_in(dir: &Path) -> std::io::Result<TempGuard> {
             Err(e) => return Err(e),
         }
     }
-    Err(std::io::Error::other(
-        "could not create temp file",
-    ))
+    Err(std::io::Error::other("could not create temp file"))
 }
 
 fn cleanup_temp_files(dir: &Path) -> std::io::Result<()> {
@@ -567,15 +566,25 @@ mod tests {
         let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
         let seen2 = seen.clone();
         mgr.on_change(std::rc::Rc::new(move |s| {
-            seen2.borrow_mut().push(format!("{}@{}", s.theme, s.font_size));
+            seen2
+                .borrow_mut()
+                .push(format!("{}@{}", s.theme, s.font_size));
         }));
 
         mgr.cycle_theme();
         mgr.change_font_size(2);
         let log = seen.borrow();
         assert_eq!(log.len(), 2, "one notification per actual change");
-        assert!(log[0].ends_with("@11"), "font unchanged by theme cycle: {}", log[0]);
-        assert!(log[1].ends_with("@13"), "new font size delivered: {}", log[1]);
+        assert!(
+            log[0].ends_with("@11"),
+            "font unchanged by theme cycle: {}",
+            log[0]
+        );
+        assert!(
+            log[1].ends_with("@13"),
+            "new font size delivered: {}",
+            log[1]
+        );
         fs::remove_dir_all(dir).ok();
     }
 
@@ -639,9 +648,15 @@ mod tests {
 
         // Out of range values clamp into [MIN, MAX].
         let raw = serde_json::json!({"glass_opacity": 5.0});
-        assert_eq!(Settings::validate_raw(&raw).glass_opacity, MAX_GLASS_OPACITY);
+        assert_eq!(
+            Settings::validate_raw(&raw).glass_opacity,
+            MAX_GLASS_OPACITY
+        );
         let raw = serde_json::json!({"glass_opacity": 0.0});
-        assert_eq!(Settings::validate_raw(&raw).glass_opacity, MIN_GLASS_OPACITY);
+        assert_eq!(
+            Settings::validate_raw(&raw).glass_opacity,
+            MIN_GLASS_OPACITY
+        );
 
         // Non-numbers, booleans, NaN and inf all fall back to default.
         for junk in ["0.9", "true", "NaN"] {
@@ -657,13 +672,25 @@ mod tests {
     #[test]
     fn glass_opacity_rejects_nan_and_inf() {
         let raw = serde_json::json!({"glass_opacity": 1.0f64 / 0.0f64});
-        assert_eq!(Settings::validate_raw(&raw).glass_opacity, DEFAULT_GLASS_OPACITY);
+        assert_eq!(
+            Settings::validate_raw(&raw).glass_opacity,
+            DEFAULT_GLASS_OPACITY
+        );
         let raw = serde_json::json!({"glass_opacity": -(1.0f64 / 0.0f64)});
-        assert_eq!(Settings::validate_raw(&raw).glass_opacity, DEFAULT_GLASS_OPACITY);
+        assert_eq!(
+            Settings::validate_raw(&raw).glass_opacity,
+            DEFAULT_GLASS_OPACITY
+        );
         let raw = serde_json::json!({"glass_opacity": serde_json::Value::Null});
-        assert_eq!(Settings::validate_raw(&raw).glass_opacity, DEFAULT_GLASS_OPACITY);
+        assert_eq!(
+            Settings::validate_raw(&raw).glass_opacity,
+            DEFAULT_GLASS_OPACITY
+        );
         let raw = serde_json::json!({"glass_opacity": true});
-        assert_eq!(Settings::validate_raw(&raw).glass_opacity, DEFAULT_GLASS_OPACITY);
+        assert_eq!(
+            Settings::validate_raw(&raw).glass_opacity,
+            DEFAULT_GLASS_OPACITY
+        );
     }
 
     #[test]

@@ -83,7 +83,10 @@ impl GlassParams {
     pub fn new(enabled: bool, opacity: f32) -> Self {
         Self {
             enabled,
-            opacity: opacity.clamp(crate::settings::MIN_GLASS_OPACITY, crate::settings::MAX_GLASS_OPACITY),
+            opacity: opacity.clamp(
+                crate::settings::MIN_GLASS_OPACITY,
+                crate::settings::MAX_GLASS_OPACITY,
+            ),
         }
     }
 
@@ -111,7 +114,11 @@ impl Default for GlassParams {
 
 /// sRGB8 bytes -> normalized GL color.
 pub fn rgb01(c: [u8; 3]) -> [f32; 3] {
-    [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0]
+    [
+        c[0] as f32 / 255.0,
+        c[1] as f32 / 255.0,
+        c[2] as f32 / 255.0,
+    ]
 }
 
 /// sRGB8 bytes + alpha -> normalized GL RGBA.
@@ -236,7 +243,12 @@ impl Atlas {
         let s = self.size as f32;
         let entry = AtlasEntry {
             px: [x, y, w, h],
-            uv: [x as f32 / s, y as f32 / s, (x + w) as f32 / s, (y + h) as f32 / s],
+            uv: [
+                x as f32 / s,
+                y as f32 / s,
+                (x + w) as f32 / s,
+                (y + h) as f32 / s,
+            ],
         };
         self.entries.insert(key, entry);
         self.dirty = true;
@@ -512,7 +524,10 @@ impl GpuRenderer {
                 }
                 Ok(shader)
             };
-            let link = |vs: glow::Shader, fs: glow::Shader, label: &str| -> Result<glow::Program, String> {
+            let link = |vs: glow::Shader,
+                        fs: glow::Shader,
+                        label: &str|
+             -> Result<glow::Program, String> {
                 let program = gl
                     .create_program()
                     .map_err(|e| format!("{label}: create_program: {e}"))?;
@@ -530,12 +545,20 @@ impl GpuRenderer {
 
             let rect_program = link(
                 compile(RECT_VERTEX_SHADER, glow::VERTEX_SHADER, "tuxixi-rect-vs")?,
-                compile(RECT_FRAGMENT_SHADER, glow::FRAGMENT_SHADER, "tuxixi-rect-fs")?,
+                compile(
+                    RECT_FRAGMENT_SHADER,
+                    glow::FRAGMENT_SHADER,
+                    "tuxixi-rect-fs",
+                )?,
                 "tuxixi-rect-program",
             )?;
             let glyph_program = link(
                 compile(GLYPH_VERTEX_SHADER, glow::VERTEX_SHADER, "tuxixi-glyph-vs")?,
-                compile(GLYPH_FRAGMENT_SHADER, glow::FRAGMENT_SHADER, "tuxixi-glyph-fs")?,
+                compile(
+                    GLYPH_FRAGMENT_SHADER,
+                    glow::FRAGMENT_SHADER,
+                    "tuxixi-glyph-fs",
+                )?,
                 "tuxixi-glyph-program",
             )?;
 
@@ -563,11 +586,27 @@ impl GpuRenderer {
 
             let atlas_texture = gl.create_texture().map_err(|e| e.to_string())?;
             gl.bind_texture(glow::TEXTURE_2D, Some(atlas_texture));
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::LINEAR as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::LINEAR as i32,
+            );
             // Clamp to the edge: uv never wraps.
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_S,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_EDGE as i32,
+            );
 
             gl.disable(glow::DEPTH_TEST);
             gl.enable(glow::BLEND);
@@ -617,7 +656,14 @@ impl GpuRenderer {
     /// Render one frame and swap nothing (present is the caller's job).
     /// `width`/`height` are the framebuffer size in physical pixels and
     /// `clear` is the background RGBA (glass alpha included).
-    pub fn render(&mut self, scene: &Scene, atlas: &mut Atlas, width: i32, height: i32, clear: [f32; 4]) {
+    pub fn render(
+        &mut self,
+        scene: &Scene,
+        atlas: &mut Atlas,
+        width: i32,
+        height: i32,
+        clear: [f32; 4],
+    ) {
         unsafe {
             let gl = &self.gl;
             gl.viewport(0, 0, width, height);
@@ -632,7 +678,8 @@ impl GpuRenderer {
             if !self.rect_vertices.is_empty() {
                 gl.use_program(Some(self.rect_program));
                 gl.uniform_2_f32(
-                    gl.get_uniform_location(self.rect_program, "u_window").as_ref(),
+                    gl.get_uniform_location(self.rect_program, "u_window")
+                        .as_ref(),
                     width as f32,
                     height as f32,
                 );
@@ -655,7 +702,8 @@ impl GpuRenderer {
             if !self.glyph_vertices.is_empty() {
                 gl.use_program(Some(self.glyph_program));
                 gl.uniform_2_f32(
-                    gl.get_uniform_location(self.glyph_program, "u_window").as_ref(),
+                    gl.get_uniform_location(self.glyph_program, "u_window")
+                        .as_ref(),
                     width as f32,
                     height as f32,
                 );
@@ -710,9 +758,7 @@ impl Drop for GpuRenderer {
 // f32 -> bytes helper without a new dependency (the values are plain
 // floats; transmute-free: copy through a raw cast).
 fn bytemuck_slice(v: &[f32]) -> &[u8] {
-    unsafe {
-        std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 4)
-    }
+    unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 4) }
 }
 
 /// Push one rect quad (6 vertices) into an interleaved pos+color
@@ -722,14 +768,7 @@ pub fn push_rect(out: &mut Vec<f32>, r: &RectDraw) {
     let (x1, y1) = (r.x + r.w, r.y + r.h);
     let c = r.color;
     // Two triangles: (x0,y0) (x1,y0) (x0,y1) | (x0,y1) (x1,y0) (x1,y1)
-    for (vx, vy) in [
-        (x0, y0),
-        (x1, y0),
-        (x0, y1),
-        (x0, y1),
-        (x1, y0),
-        (x1, y1),
-    ] {
+    for (vx, vy) in [(x0, y0), (x1, y0), (x0, y1), (x0, y1), (x1, y0), (x1, y1)] {
         out.extend_from_slice(&[vx, vy, c[0], c[1], c[2], c[3]]);
     }
 }
@@ -826,7 +865,10 @@ mod tests {
         assert_eq!(atlas.len(), 4);
         atlas.reset();
         assert_eq!(atlas.len(), 0);
-        assert!(atlas.pixels.iter().all(|&v| v == 0), "reset zeroes the buffer");
+        assert!(
+            atlas.pixels.iter().all(|&v| v == 0),
+            "reset zeroes the buffer"
+        );
         assert!(atlas.needs_upload(), "reset must flag the texture dirty");
         // After reset it packs again from the top-left corner.
         assert!(atlas.insert(('c', 0), &tall));
@@ -849,7 +891,11 @@ mod tests {
         assert!(atlas.insert(('a', 0), &b));
         let before = atlas.entry(('a', 0)).copied().unwrap();
         assert!(atlas.insert(('a', 0), &b));
-        assert_eq!(atlas.entry(('a', 0)).copied().unwrap(), before, "re-insert must not move the glyph");
+        assert_eq!(
+            atlas.entry(('a', 0)).copied().unwrap(),
+            before,
+            "re-insert must not move the glyph"
+        );
         assert_eq!(atlas.len(), 1);
     }
 
@@ -978,7 +1024,13 @@ mod tests {
     #[test]
     fn scene_vertex_count_matches_contents() {
         let mut s = Scene::default();
-        s.rects.push(RectDraw { x: 0.0, y: 0.0, w: 1.0, h: 1.0, color: [0.0; 4] });
+        s.rects.push(RectDraw {
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+            color: [0.0; 4],
+        });
         s.glyphs.push(GlyphDraw {
             x: 0.0,
             y: 0.0,
@@ -1008,8 +1060,7 @@ mod tests {
     ) -> (Scene, FontFace) {
         let mut term = Terminal::new(cols, rows);
         term.feed(text.as_bytes());
-        let mut face =
-            crate::font::load_default_face("monospace", 14.0).expect("system mono font");
+        let mut face = crate::font::load_default_face("monospace", 14.0).expect("system mono font");
         face.metrics.cell_width = cw;
         face.metrics.line_height = lh;
         let mut atlas = Atlas::new(1024);
@@ -1030,8 +1081,7 @@ mod tests {
         // Glass ON: only the clear is translucent; default-bg cells
         // must not add opaque rects over it (cursor hidden so the
         // cursor block does not count).
-        let (scene, _face) =
-            scene_of("\x1b[?25lhi", 10, 2, 8, 16, GlassParams::new(true, 0.5));
+        let (scene, _face) = scene_of("\x1b[?25lhi", 10, 2, 8, 16, GlassParams::new(true, 0.5));
         assert_eq!(scene.rects.len(), 0, "no rects for default backgrounds");
         assert_eq!(scene.glyphs.len(), 2, "two glyph quads for 'hi'");
     }
@@ -1082,14 +1132,24 @@ mod tests {
     fn hidden_cursor_draws_nothing() {
         let mut term = Terminal::new(4, 2);
         term.feed(b"\x1b[?25lA");
-        let mut face =
-            crate::font::load_default_face("monospace", 14.0).expect("system mono font");
+        let mut face = crate::font::load_default_face("monospace", 14.0).expect("system mono font");
         face.metrics.cell_width = 8;
         face.metrics.line_height = 16;
         let mut atlas = Atlas::new(1024);
-        let scene = build_scene(&term, 0, &flat_palette(), &mut face, &mut atlas, None, GlassParams::default());
+        let scene = build_scene(
+            &term,
+            0,
+            &flat_palette(),
+            &mut face,
+            &mut atlas,
+            None,
+            GlassParams::default(),
+        );
         assert!(
-            !scene.rects.iter().any(|r| r.color == rgba01([255, 255, 0], 1.0)),
+            !scene
+                .rects
+                .iter()
+                .any(|r| r.color == rgba01([255, 255, 0], 1.0)),
             "hidden cursor must not paint the cursor block"
         );
     }
@@ -1097,8 +1157,14 @@ mod tests {
     #[test]
     fn inverse_cells_swap_fg_and_bg() {
         // Cursor hidden: otherwise the cursor block wins over inverse.
-        let (scene, _face) =
-            scene_of("\x1b[?25l\x1b[7mA\x1b[0m", 4, 2, 8, 16, GlassParams::default());
+        let (scene, _face) = scene_of(
+            "\x1b[?25l\x1b[7mA\x1b[0m",
+            4,
+            2,
+            8,
+            16,
+            GlassParams::default(),
+        );
         // Inverse: bg becomes the foreground color (white) -> opaque
         // white rect behind the cell.
         assert_eq!(scene.rects.len(), 1);
@@ -1115,19 +1181,25 @@ mod tests {
             .collect();
         assert_eq!(underlines.len(), 1);
         assert!((underlines[0].y - 15.0).abs() < 1e-6, "y = lh - 1");
-        assert_eq!(underlines[0].color, rgba01([255, 255, 255], 1.0), "fg-colored");
+        assert_eq!(
+            underlines[0].color,
+            rgba01([255, 255, 255], 1.0),
+            "fg-colored"
+        );
     }
 
     #[test]
     fn selection_highlight_is_opaque_and_distinct() {
         let mut term = Terminal::new(6, 2);
         term.feed(b"\x1b[?25labcdef");
-        let mut face =
-            crate::font::load_default_face("monospace", 14.0).expect("system mono font");
+        let mut face = crate::font::load_default_face("monospace", 14.0).expect("system mono font");
         face.metrics.cell_width = 8;
         face.metrics.line_height = 16;
         let mut atlas = Atlas::new(1024);
-        let sel = Selection { start: (0, 0), end: (2, 0) };
+        let sel = Selection {
+            start: (0, 0),
+            end: (2, 0),
+        };
         let scene = build_scene(
             &term,
             0,
@@ -1151,13 +1223,28 @@ mod tests {
         term.feed(b"one\r\ntwo\r\nthree\r\nfour");
         let sb = term.scrollback_len();
         assert!(sb >= 2);
-        let mut face =
-            crate::font::load_default_face("monospace", 14.0).expect("system mono font");
+        let mut face = crate::font::load_default_face("monospace", 14.0).expect("system mono font");
         face.metrics.cell_width = 8;
         face.metrics.line_height = 16;
         let mut atlas = Atlas::new(1024);
-        let live = build_scene(&term, 0, &flat_palette(), &mut face, &mut atlas, None, GlassParams::default());
-        let scrolled = build_scene(&term, sb, &flat_palette(), &mut face, &mut atlas, None, GlassParams::default());
+        let live = build_scene(
+            &term,
+            0,
+            &flat_palette(),
+            &mut face,
+            &mut atlas,
+            None,
+            GlassParams::default(),
+        );
+        let scrolled = build_scene(
+            &term,
+            sb,
+            &flat_palette(),
+            &mut face,
+            &mut atlas,
+            None,
+            GlassParams::default(),
+        );
         assert_ne!(live, scrolled, "scrollback offset changes the scene");
     }
 
@@ -1167,12 +1254,19 @@ mod tests {
         // CJK char is double-width in the grid; the spacer half must
         // not produce its own glyph quad.
         term.feed("漢".as_bytes());
-        let mut face =
-            crate::font::load_default_face("monospace", 14.0).expect("system mono font");
+        let mut face = crate::font::load_default_face("monospace", 14.0).expect("system mono font");
         face.metrics.cell_width = 8;
         face.metrics.line_height = 16;
         let mut atlas = Atlas::new(1024);
-        let scene = build_scene(&term, 0, &flat_palette(), &mut face, &mut atlas, None, GlassParams::default());
+        let scene = build_scene(
+            &term,
+            0,
+            &flat_palette(),
+            &mut face,
+            &mut atlas,
+            None,
+            GlassParams::default(),
+        );
         // Invariant: the spacer cell at column 1 NEVER produces a glyph
         // quad. With a CJK-capable font there is exactly one quad at
         // col 0; with a font missing the glyph, zero quads.
@@ -1186,8 +1280,7 @@ mod tests {
 
     #[test]
     fn space_cells_produce_nothing() {
-        let (scene, _face) =
-            scene_of("\x1b[?25l  ", 4, 2, 8, 16, GlassParams::default());
+        let (scene, _face) = scene_of("\x1b[?25l  ", 4, 2, 8, 16, GlassParams::default());
         assert_eq!(scene.glyphs.len(), 0, "no glyph quads for spaces");
         assert_eq!(scene.rects.len(), 0, "and no rects either");
     }
@@ -1198,13 +1291,23 @@ mod tests {
         // cell_px + (left, top), size = bitmap size.
         let mut term = Terminal::new(8, 2);
         term.feed(b" A");
-        let mut face =
-            crate::font::load_default_face("monospace", 14.0).expect("system mono font");
+        let mut face = crate::font::load_default_face("monospace", 14.0).expect("system mono font");
         face.metrics.cell_width = 8;
         face.metrics.line_height = 16;
         let mut atlas = Atlas::new(1024);
-        let scene = build_scene(&term, 0, &flat_palette(), &mut face, &mut atlas, None, GlassParams::default());
-        assert!(!scene.glyphs.is_empty(), "monospace system font rasterizes A");
+        let scene = build_scene(
+            &term,
+            0,
+            &flat_palette(),
+            &mut face,
+            &mut atlas,
+            None,
+            GlassParams::default(),
+        );
+        assert!(
+            !scene.glyphs.is_empty(),
+            "monospace system font rasterizes A"
+        );
         let second = scene
             .glyphs
             .iter()

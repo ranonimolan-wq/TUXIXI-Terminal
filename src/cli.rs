@@ -111,8 +111,11 @@ fn run_update_command(rest: &[String], out: &mut CliOutput) {
     match update::run_plan(&plan) {
         Ok(report) => {
             if !plan.help {
-                out.stdout
-                    .push_str(&format!("{PURPLE}\u{25c6} TUXIXI UPDATE{RESET}\n", PURPLE = sysinfo::PURPLE, RESET = sysinfo::RESET));
+                out.stdout.push_str(&format!(
+                    "{PURPLE}\u{25c6} TUXIXI UPDATE{RESET}\n",
+                    PURPLE = sysinfo::PURPLE,
+                    RESET = sysinfo::RESET
+                ));
             }
             out.stdout.push_str(&report);
             out.exit_code = 0;
@@ -156,7 +159,11 @@ fn run_theme_command(rest: &[String], out: &mut CliOutput) {
 }
 
 /// The real worker; `config_override` injects the config path for tests.
-fn run_theme_command_at(rest: &[String], out: &mut CliOutput, config_override: Option<&std::path::Path>) {
+fn run_theme_command_at(
+    rest: &[String],
+    out: &mut CliOutput,
+    config_override: Option<&std::path::Path>,
+) {
     let mut mgr = match config_override {
         Some(p) => crate::settings::SettingsManager::load(p),
         None => crate::settings::SettingsManager::load_default_location(),
@@ -167,11 +174,16 @@ fn run_theme_command_at(rest: &[String], out: &mut CliOutput, config_override: O
     match sub {
         "--help" | "help" | "-h" => {
             out.stdout.push_str(&usage);
-            out.stdout.push_str("\n  tuxixi theme             list all themes (current one marked)\n");
-            out.stdout.push_str("  tuxixi theme current     print the active theme name\n");
-            out.stdout.push_str("  tuxixi theme set <name>  switch the theme (persisted)\n");
-            out.stdout.push_str("  tuxixi theme next        cycle to the next theme\n");
-            out.stdout.push_str("\nUser themes (any format) go into ~/.config/tuxixi/themes/\n");
+            out.stdout
+                .push_str("\n  tuxixi theme             list all themes (current one marked)\n");
+            out.stdout
+                .push_str("  tuxixi theme current     print the active theme name\n");
+            out.stdout
+                .push_str("  tuxixi theme set <name>  switch the theme (persisted)\n");
+            out.stdout
+                .push_str("  tuxixi theme next        cycle to the next theme\n");
+            out.stdout
+                .push_str("\nUser themes (any format) go into ~/.config/tuxixi/themes/\n");
         }
         "list" => {
             let reg = crate::theme::Registry::global();
@@ -242,7 +254,8 @@ fn run_theme_command_at(rest: &[String], out: &mut CliOutput, config_override: O
                     RESET = sysinfo::RESET
                 ));
             } else {
-                out.stdout.push_str(&format!("Theme '{name}' is already active.\n"));
+                out.stdout
+                    .push_str(&format!("Theme '{name}' is already active.\n"));
             }
         }
         "next" => {
@@ -271,7 +284,11 @@ fn run_theme_command_at(rest: &[String], out: &mut CliOutput, config_override: O
 
 fn gather_ip() -> sysinfo::IpInfo {
     let (internal, iface) = internal_ip_and_iface();
-    let external = if internal.is_some() { external_ip() } else { None };
+    let external = if internal.is_some() {
+        external_ip()
+    } else {
+        None
+    };
     sysinfo::IpInfo {
         internal_ip: internal,
         iface,
@@ -293,10 +310,7 @@ fn internal_ip_and_iface() -> (Option<String>, Option<String>) {
             }
         }
     }
-    if let Ok(output) = std::process::Command::new("hostname")
-        .arg("-I")
-        .output()
-    {
+    if let Ok(output) = std::process::Command::new("hostname").arg("-I").output() {
         if output.status.success() {
             let first = String::from_utf8_lossy(&output.stdout)
                 .split_whitespace()
@@ -313,7 +327,14 @@ fn internal_ip_and_iface() -> (Option<String>, Option<String>) {
 fn external_ip() -> Option<String> {
     // Same service as the original script: api.ipify.org via curl.
     std::process::Command::new("curl")
-        .args(["-fsS", "--connect-timeout", "1", "--max-time", "2", "https://api.ipify.org"])
+        .args([
+            "-fsS",
+            "--connect-timeout",
+            "1",
+            "--max-time",
+            "2",
+            "https://api.ipify.org",
+        ])
         .output()
         .ok()
         .filter(|o| o.status.success())
@@ -335,44 +356,95 @@ pub fn help_text() -> String {
     let mut out = String::new();
     out.push('\n');
     out.push_str(&format!("{B}{P}◆ TUXIXI TERMINAL{R} {S}v{VERSION}{R}\n"));
-    out.push_str(&format!("{S}────────────────────────────────────────{R}\n\n"));
+    out.push_str(&format!(
+        "{S}────────────────────────────────────────{R}\n\n"
+    ));
 
     out.push_str(&format!("{B}{C}COMMANDS{R}\n"));
     out.push_str(&format!("  {L}tuxixi --help{R}      {S}Display help{R}\n"));
-    out.push_str(&format!("  {L}tuxixi --version{R}   {S}Version information{R}\n"));
-    out.push_str(&format!("  {L}tuxixi --system{R}    {S}System information{R}\n"));
-    out.push_str(&format!("  {L}tuxixi --sys{R}       {S}System information{R}\n"));
-    out.push_str(&format!("  {L}tuxixi --ip{R}        {S}Network information{R}\n\n"));
+    out.push_str(&format!(
+        "  {L}tuxixi --version{R}   {S}Version information{R}\n"
+    ));
+    out.push_str(&format!(
+        "  {L}tuxixi --system{R}    {S}System information{R}\n"
+    ));
+    out.push_str(&format!(
+        "  {L}tuxixi --sys{R}       {S}System information{R}\n"
+    ));
+    out.push_str(&format!(
+        "  {L}tuxixi --ip{R}        {S}Network information{R}\n\n"
+    ));
 
     out.push_str(&format!("{B}{C}UPDATES{R}\n"));
-    out.push_str(&format!("  {L}tuxixi update{R}           {S}Update binary + themes (hash based){R}\n"));
-    out.push_str(&format!("  {L}tuxixi update --self{R}    {S}Update the tuxixi binary itself{R}\n"));
-    out.push_str(&format!("  {L}tuxixi update --theme{R}   {S}Sync themes from the repository{R}\n"));
-    out.push_str(&format!("  {L}tuxixi update --check{R}   {S}Only show what would change{R}\n\n"));
+    out.push_str(&format!(
+        "  {L}tuxixi update{R}           {S}Update binary + themes (hash based){R}\n"
+    ));
+    out.push_str(&format!(
+        "  {L}tuxixi update --self{R}    {S}Update the tuxixi binary itself{R}\n"
+    ));
+    out.push_str(&format!(
+        "  {L}tuxixi update --theme{R}   {S}Sync themes from the repository{R}\n"
+    ));
+    out.push_str(&format!(
+        "  {L}tuxixi update --check{R}   {S}Only show what would change{R}\n\n"
+    ));
 
     out.push_str(&format!("{B}{C}THEMES{R}\n"));
-    out.push_str(&format!("  {S}32 built-in themes (the real upstream files), default: {DEFAULT}{R}\n", DEFAULT = crate::theme::DEFAULT_THEME));
-    out.push_str(&format!("  {L}tuxixi theme list{R}       {S}Show all themes (current one marked){R}\n"));
-    out.push_str(&format!("  {L}tuxixi theme set <name>{R} {S}Switch the theme{R}\n"));
-    out.push_str(&format!("  {L}tuxixi theme next{R}       {S}Cycle to the next theme{R}\n"));
-    out.push_str(&format!("  {L}Ctrl+Shift+T{R}            {S}Cycle theme inside TUXIXI{R}\n"));
-    out.push_str(&format!("  {S}Drop your own themes (JSON / iTerm2 .itermcolors / Alacritty{R}\n"));
+    out.push_str(&format!(
+        "  {S}32 built-in themes (the real upstream files), default: {DEFAULT}{R}\n",
+        DEFAULT = crate::theme::DEFAULT_THEME
+    ));
+    out.push_str(&format!(
+        "  {L}tuxixi theme list{R}       {S}Show all themes (current one marked){R}\n"
+    ));
+    out.push_str(&format!(
+        "  {L}tuxixi theme set <name>{R} {S}Switch the theme{R}\n"
+    ));
+    out.push_str(&format!(
+        "  {L}tuxixi theme next{R}       {S}Cycle to the next theme{R}\n"
+    ));
+    out.push_str(&format!(
+        "  {L}Ctrl+Shift+T{R}            {S}Cycle theme inside TUXIXI{R}\n"
+    ));
+    out.push_str(&format!(
+        "  {S}Drop your own themes (JSON / iTerm2 .itermcolors / Alacritty{R}\n"
+    ));
     out.push_str(&format!("  {S}.toml/.yml / kitty .conf) into:{R}\n"));
-    out.push_str(&format!("  {L}~/.config/tuxixi/themes/{R}   {S}(a cloned theme repo works too){R}\n\n"));
+    out.push_str(&format!(
+        "  {L}~/.config/tuxixi/themes/{R}   {S}(a cloned theme repo works too){R}\n\n"
+    ));
 
     out.push_str(&format!("{B}{C}UTILITIES{R}\n"));
-    out.push_str(&format!("  {L}ll{R}                 {S}List directory contents{R}\n"));
-    out.push_str(&format!("  {L}cls{R}                {S}Clear terminal{R}\n\n"));
+    out.push_str(&format!(
+        "  {L}ll{R}                 {S}List directory contents{R}\n"
+    ));
+    out.push_str(&format!(
+        "  {L}cls{R}                {S}Clear terminal{R}\n\n"
+    ));
 
     out.push_str(&format!("{B}{C}KEYBOARD SHORTCUTS{R}\n"));
-    out.push_str(&format!("  {A}Ctrl+Shift+C{R}       {S}Copy selection{R}\n"));
+    out.push_str(&format!(
+        "  {A}Ctrl+Shift+C{R}       {S}Copy selection{R}\n"
+    ));
     out.push_str(&format!("  {A}Ctrl+Shift+V{R}       {S}Paste cleanly{R}\n"));
-    out.push_str(&format!("  {A}Ctrl+Shift+T{R}       {S}Change theme (live){R}\n"));
-    out.push_str(&format!("  {A}Ctrl+Shift+G{R}       {S}Toggle glass blur{R}\n"));
-    out.push_str(&format!("  {A}Ctrl+{R}={A}/{R}- {S}       {S}Increase / decrease font size{R}\n"));
-    out.push_str(&format!("  {A}Shift+PageUp/Down{R}  {S}Scroll the scrollback{R}\n"));
-    out.push_str(&format!("  {A}Mouse wheel{R}        {S}Scroll the scrollback{R}\n"));
-    out.push_str(&format!("  {A}Mouse drag{R}         {S}Select text (release to keep){R}\n\n"));
+    out.push_str(&format!(
+        "  {A}Ctrl+Shift+T{R}       {S}Change theme (live){R}\n"
+    ));
+    out.push_str(&format!(
+        "  {A}Ctrl+Shift+G{R}       {S}Toggle glass blur{R}\n"
+    ));
+    out.push_str(&format!(
+        "  {A}Ctrl+{R}={A}/{R}- {S}       {S}Increase / decrease font size{R}\n"
+    ));
+    out.push_str(&format!(
+        "  {A}Shift+PageUp/Down{R}  {S}Scroll the scrollback{R}\n"
+    ));
+    out.push_str(&format!(
+        "  {A}Mouse wheel{R}        {S}Scroll the scrollback{R}\n"
+    ));
+    out.push_str(&format!(
+        "  {A}Mouse drag{R}         {S}Select text (release to keep){R}\n\n"
+    ));
 
     out.push_str(&format!("{P}◆{R} {S}Built for terminal enthusiasts{R}\n\n"));
     out
@@ -387,7 +459,11 @@ mod tests {
         let out = dispatch(&["--version".to_string()]);
         assert_eq!(out.exit_code, 0);
         assert!(out.stdout.contains("TUXIXI Terminal"));
-        assert!(out.stdout.contains(&format!("v{VERSION}")), "stdout: {}", out.stdout);
+        assert!(
+            out.stdout.contains(&format!("v{VERSION}")),
+            "stdout: {}",
+            out.stdout
+        );
         assert!(out.stdout.ends_with('\n'));
     }
 
@@ -572,7 +648,11 @@ mod tests {
         assert!(out.stdout.contains("TUXIXI THEMES"));
         assert!(out.stdout.contains("TokyoNight"));
         assert!(out.stdout.contains("Dracula"));
-        assert!(out.stdout.contains("(current)"), "default must be marked: {}", out.stdout);
+        assert!(
+            out.stdout.contains("(current)"),
+            "default must be marked: {}",
+            out.stdout
+        );
     }
 
     #[test]
@@ -588,7 +668,11 @@ mod tests {
     fn theme_set_persists_to_config() {
         let cfg = temp_theme_config("set");
         let mut out = CliOutput::new();
-        run_theme_command_at(&["set".to_string(), "Dracula".to_string()], &mut out, Some(&cfg));
+        run_theme_command_at(
+            &["set".to_string(), "Dracula".to_string()],
+            &mut out,
+            Some(&cfg),
+        );
         assert_eq!(out.exit_code, 0);
         assert!(out.stdout.contains("Dracula"));
         // The change must be persisted.
@@ -597,7 +681,11 @@ mod tests {
         assert_eq!(parsed["theme"], "Dracula");
         // Setting it again reports "already active" without error.
         let mut out2 = CliOutput::new();
-        run_theme_command_at(&["set".to_string(), "Dracula".to_string()], &mut out2, Some(&cfg));
+        run_theme_command_at(
+            &["set".to_string(), "Dracula".to_string()],
+            &mut out2,
+            Some(&cfg),
+        );
         assert_eq!(out2.exit_code, 0);
         assert!(out2.stdout.contains("already active"));
         std::fs::remove_dir_all(cfg.parent().unwrap()).ok();
@@ -607,7 +695,11 @@ mod tests {
     fn theme_set_unknown_theme_errors() {
         let cfg = temp_theme_config("setbad");
         let mut out = CliOutput::new();
-        run_theme_command_at(&["set".to_string(), "Nope".to_string()], &mut out, Some(&cfg));
+        run_theme_command_at(
+            &["set".to_string(), "Nope".to_string()],
+            &mut out,
+            Some(&cfg),
+        );
         assert_eq!(out.exit_code, 2);
         assert!(out.stderr.contains("Unknown theme:"));
         assert!(out.stderr.contains("Nope"));
@@ -632,7 +724,10 @@ mod tests {
         assert!(out.stdout.contains("Theme: "));
         let content = std::fs::read_to_string(&cfg).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-        assert_ne!(parsed["theme"], serde_json::json!(crate::theme::DEFAULT_THEME));
+        assert_ne!(
+            parsed["theme"],
+            serde_json::json!(crate::theme::DEFAULT_THEME)
+        );
         // And the new theme must be a real one.
         let new_name = parsed["theme"].as_str().unwrap();
         assert!(crate::theme::Registry::global().get(new_name).is_some());

@@ -93,7 +93,16 @@ pub fn blend(a: [u8; 3], b: [u8; 3], t: f32) -> [u8; 3] {
 
 /// Fill a rect with a solid packed color, clipped to the buffer.
 #[allow(clippy::too_many_arguments)]
-pub fn fill_rect(buf: &mut [u32], width: usize, height: usize, x: i32, y: i32, w: u32, h: u32, px: u32) {
+pub fn fill_rect(
+    buf: &mut [u32],
+    width: usize,
+    height: usize,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    px: u32,
+) {
     let x0 = x.max(0) as usize;
     let y0 = y.max(0) as usize;
     let x1 = ((x as i64 + w as i64) as usize).min(width);
@@ -149,7 +158,16 @@ pub fn blit_glyph(
 
 /// Draw a horizontal underline at the bottom of a cell.
 #[allow(clippy::too_many_arguments)]
-pub fn draw_underline(buf: &mut [u32], width: usize, height: usize, x: i32, y: i32, cw: u32, lh: u32, fg: [u8; 3]) {
+pub fn draw_underline(
+    buf: &mut [u32],
+    width: usize,
+    height: usize,
+    x: i32,
+    y: i32,
+    cw: u32,
+    lh: u32,
+    fg: [u8; 3],
+) {
     let line_y = y + lh as i32 - 2;
     fill_rect(
         buf,
@@ -186,9 +204,7 @@ impl Selection {
         if y0 == y1 {
             y == y0 && x >= x0 && x <= x1
         } else {
-            (y == y0 && x >= x0)
-                || (y == y1 && x <= x1)
-                || (y > y0 && y < y1)
+            (y == y0 && x >= x0) || (y == y1 && x <= x1) || (y > y0 && y < y1)
         }
     }
 
@@ -240,7 +256,11 @@ pub fn paint(
 ) {
     // Clear the whole window with the theme background first (also
     // covers gaps when scrolled past the top of the scrollback).
-    buf.fill(pack(palette.background[0], palette.background[1], palette.background[2]));
+    buf.fill(pack(
+        palette.background[0],
+        palette.background[1],
+        palette.background[2],
+    ));
 
     let cw = face.metrics.cell_width.max(1) as usize;
     let lh = face.metrics.line_height.max(1) as usize;
@@ -335,7 +355,9 @@ pub fn paint(
             }
 
             if cell.flags & UNDERLINE != 0 {
-                draw_underline(buf, width, height, px as i32, py as i32, cw as u32, lh as u32, fg);
+                draw_underline(
+                    buf, width, height, px as i32, py as i32, cw as u32, lh as u32, fg,
+                );
             }
         }
     }
@@ -537,12 +559,18 @@ mod tests {
         let mut buf = vec![0u32; w * h];
         paint(&mut buf, w, h, &t, 0, &p, &mut face, None);
         // Top-left cell = cursor block -> red.
-        assert_eq!(unpack(buf[face.metrics.cell_width as usize / 2]), [255, 0, 0]);
+        assert_eq!(
+            unpack(buf[face.metrics.cell_width as usize / 2]),
+            [255, 0, 0]
+        );
         // Cursor hidden -> no red block.
         t.feed(b"\x1b[?25l");
         let mut buf2 = vec![0u32; w * h];
         paint(&mut buf2, w, h, &t, 0, &p, &mut face, None);
-        assert_ne!(unpack(buf2[face.metrics.cell_width as usize / 2]), [255, 0, 0]);
+        assert_ne!(
+            unpack(buf2[face.metrics.cell_width as usize / 2]),
+            [255, 0, 0]
+        );
     }
 
     #[test]
@@ -584,7 +612,10 @@ mod tests {
     fn selection_contains_orders_its_endpoints() {
         // Linear (text-flow) selection: start (5,1) -> end (2,3) means
         // row 1 from col 5 to the edge, row 2 fully, row 3 up to col 2.
-        let s = Selection { start: (5, 1), end: (2, 3) };
+        let s = Selection {
+            start: (5, 1),
+            end: (2, 3),
+        };
         assert!(s.contains(5, 1));
         assert!(s.contains(2, 3));
         assert!(s.contains(0, 2)); // full middle row
@@ -598,7 +629,10 @@ mod tests {
 
     #[test]
     fn selection_on_one_row_is_a_range() {
-        let s = Selection { start: (1, 0), end: (3, 0) };
+        let s = Selection {
+            start: (1, 0),
+            end: (3, 0),
+        };
         assert!(s.contains(1, 0));
         assert!(s.contains(2, 0));
         assert!(s.contains(3, 0));
@@ -612,9 +646,15 @@ mod tests {
         // Wide enough that neither line wraps.
         let mut t = Terminal::new(20, 4);
         t.feed(b"hello world\r\nsecond line");
-        let s = Selection { start: (0, 0), end: (4, 0) };
+        let s = Selection {
+            start: (0, 0),
+            end: (4, 0),
+        };
         assert_eq!(s.text(&t), "hello");
-        let s = Selection { start: (0, 0), end: (10, 1) };
+        let s = Selection {
+            start: (0, 0),
+            end: (10, 1),
+        };
         assert_eq!(s.text(&t), "hello world\nsecond line");
     }
 
@@ -635,7 +675,10 @@ mod tests {
         let w = cw * 6;
         let h = lh * 2;
         let mut with_sel = vec![0u32; w * h];
-        let sel = Selection { start: (0, 0), end: (2, 0) };
+        let sel = Selection {
+            start: (0, 0),
+            end: (2, 0),
+        };
         paint(&mut with_sel, w, h, &t, 0, &p, &mut face, Some(&sel));
         let mut without = vec![0u32; w * h];
         paint(&mut without, w, h, &t, 0, &p, &mut face, None);
@@ -670,7 +713,7 @@ mod tests {
         assert_eq!(p.ansi[4], [0x00, 0x00, 0xEE]); // blue
         assert_eq!(p.ansi[8], [0x7F, 0x7F, 0x7F]); // bright black
         assert_eq!(p.ansi[15], [0xFF, 0xFF, 0xFF]); // bright white
-        // fg/bg/cursor still come through untouched.
+                                                    // fg/bg/cursor still come through untouched.
         assert_eq!(p.foreground, [0xC0, 0xCA, 0xF5]);
         assert_eq!(p.background, [0x1A, 0x1B, 0x26]);
     }
@@ -682,8 +725,16 @@ mod tests {
         let colors = term_colors_with_palette(vec![crate::theme::Rgba::opaque("#ABCDEF")]);
         let p = Palette::from_terminal_colors(&colors);
         assert_eq!(p.ansi[0], [0xAB, 0xCD, 0xEF]);
-        assert_eq!(p.ansi[1], [0xCD, 0x00, 0x00], "slot 1 falls back to standard red");
-        assert_eq!(p.ansi[15], [0xFF, 0xFF, 0xFF], "slot 15 falls back to standard white");
+        assert_eq!(
+            p.ansi[1],
+            [0xCD, 0x00, 0x00],
+            "slot 1 falls back to standard red"
+        );
+        assert_eq!(
+            p.ansi[15],
+            [0xFF, 0xFF, 0xFF],
+            "slot 15 falls back to standard white"
+        );
     }
 
     #[test]

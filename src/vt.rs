@@ -682,19 +682,12 @@ fn parse_extended_color(items: &[&[u16]]) -> (Option<Color>, usize) {
         let mode = items.get(1).and_then(|s| s.first().copied());
         match mode {
             Some(5) => {
-                let n = items
-                    .get(2)
-                    .and_then(|s| s.first().copied())
-                    .unwrap_or(0);
+                let n = items.get(2).and_then(|s| s.first().copied()).unwrap_or(0);
                 (Some(indexed_color(n as u8)), 3)
             }
             Some(2) => {
-                let get = |k: usize| {
-                    items
-                        .get(k)
-                        .and_then(|s| s.first().copied())
-                        .unwrap_or(0) as u8
-                };
+                let get =
+                    |k: usize| items.get(k).and_then(|s| s.first().copied()).unwrap_or(0) as u8;
                 (Some(Color::Rgb([get(2), get(3), get(4)])), 5)
             }
             _ => (None, 1),
@@ -723,7 +716,9 @@ pub fn indexed_color(n: u8) -> Color {
 
 impl Perform for Terminal {
     fn print(&mut self, c: char) {
-        let width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1).max(1) as u16;
+        let width = unicode_width::UnicodeWidthChar::width(c)
+            .unwrap_or(1)
+            .max(1) as u16;
 
         if self.pending_wrap {
             self.pending_wrap = false;
@@ -733,8 +728,7 @@ impl Perform for Terminal {
 
         // Snapshot the attribute state first: `cell_mut` borrows the
         // grid, and the borrow checker wants these as local values.
-        let (col, row, fg, bg, mut flags) =
-            (self.col, self.row, self.fg, self.bg, self.flags);
+        let (col, row, fg, bg, mut flags) = (self.col, self.row, self.fg, self.bg, self.flags);
         if width >= 2 {
             flags |= WIDE;
         }
@@ -763,15 +757,15 @@ impl Perform for Terminal {
 
     fn execute(&mut self, byte: u8) {
         match byte {
-            0x07 => {}                                    // BEL
-            0x08 => self.backspace(),                     // BS
-            0x09 => self.advance_tab(),                   // HT
+            0x07 => {}                  // BEL
+            0x08 => self.backspace(),   // BS
+            0x09 => self.advance_tab(), // HT
             0x0A..=0x0C => {
                 self.pending_wrap = false;
                 self.linefeed();
             }
-            0x0D => self.carriage_return(),               // CR
-            _ => {}                                       // DEL & others ignored
+            0x0D => self.carriage_return(), // CR
+            _ => {}                         // DEL & others ignored
         }
     }
 
@@ -785,10 +779,7 @@ impl Perform for Terminal {
         match action {
             'A' => {
                 let n = self.param(params, 0, 1).max(1);
-                self.row = self
-                    .row
-                    .saturating_sub(n)
-                    .max(self.scroll_top);
+                self.row = self.row.saturating_sub(n).max(self.scroll_top);
                 self.pending_wrap = false;
             }
             'B' | 'e' => {
@@ -997,10 +988,7 @@ impl Perform for Terminal {
             Some(b'0') | Some(b'2') => {
                 if let Some(rest) = params.get(1) {
                     let title = String::from_utf8_lossy(rest);
-                    self.title = title
-                        .chars()
-                        .take(Self::MAX_TITLE_LEN)
-                        .collect();
+                    self.title = title.chars().take(Self::MAX_TITLE_LEN).collect();
                 }
             }
             _ => {}
@@ -1075,7 +1063,11 @@ mod tests {
         assert_eq!(text(&t, 5), "g");
         assert_eq!(t.scrollback_len(), 1);
         assert_eq!(
-            t.scrollback_row(0).unwrap().iter().map(|c| c.c).collect::<String>(),
+            t.scrollback_row(0)
+                .unwrap()
+                .iter()
+                .map(|c| c.c)
+                .collect::<String>(),
             "a                   "
         );
     }
@@ -1476,8 +1468,8 @@ mod tests {
         assert_eq!(t.scrollback_len(), 0);
         feed(&mut t, "\x1b[?1049l");
         feed(&mut t, "\x1b[?1049h\x1b[?1049l"); // switch twice more
-        // The normal screen was NEVER written (all output went to the
-        // alt screen) and the scrollback is still empty.
+                                                // The normal screen was NEVER written (all output went to the
+                                                // alt screen) and the scrollback is still empty.
         assert_eq!(text(&t, 0), "");
         assert_eq!(t.scrollback_len(), 0);
     }
@@ -1502,8 +1494,8 @@ mod tests {
     fn wide_char_at_line_end_wraps_cleanly() {
         let mut t = term();
         feed(&mut t, "abcdefghi漢"); // 9 ascii + wide at col 9..10
-        // '漢' starts at col 9 (last col is 9 in 20 cols? no, 20 cols):
-        // fits at 9..11, no wrap. Then printing one more char wraps.
+                                     // '漢' starts at col 9 (last col is 9 in 20 cols? no, 20 cols):
+                                     // fits at 9..11, no wrap. Then printing one more char wraps.
         feed(&mut t, "X");
         assert_eq!(t.cell(11, 0).unwrap().c, 'X');
     }

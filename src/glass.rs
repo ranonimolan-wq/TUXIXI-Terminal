@@ -65,7 +65,11 @@ mod imp {
                 display,
                 window_id as u64,
                 blur_atom,
-                if cardinal == 0 { 6 /* XA_CARDINAL fallback */ } else { cardinal },
+                if cardinal == 0 {
+                    6 /* XA_CARDINAL fallback */
+                } else {
+                    cardinal
+                },
                 32,
                 0, /* PropModeReplace */
                 std::ptr::null(),

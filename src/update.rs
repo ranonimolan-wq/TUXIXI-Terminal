@@ -23,7 +23,8 @@ use sha2::{Digest, Sha256};
 
 pub const REPO_RAW_BASE: &str =
     "https://raw.githubusercontent.com/ranonimolan-wq/TUXIXI-Terminal/main";
-pub const MANIFEST_URL: &str = "https://raw.githubusercontent.com/ranonimolan-wq/TUXIXI-Terminal/main/themes/manifest.json";
+pub const MANIFEST_URL: &str =
+    "https://raw.githubusercontent.com/ranonimolan-wq/TUXIXI-Terminal/main/themes/manifest.json";
 pub const TARBALL_URL: &str =
     "https://github.com/ranonimolan-wq/TUXIXI-Terminal/releases/latest/download/tuxixi-x86_64-linux.tar.gz";
 pub const BINARY_NAME_IN_TARBALL: &str = "tuxixi";
@@ -52,14 +53,7 @@ pub struct CurlFetcher;
 impl Fetcher for CurlFetcher {
     fn fetch(&self, url: &str) -> Result<Vec<u8>, String> {
         let out = Command::new("curl")
-            .args([
-                "-fsSL",
-                "--connect-timeout",
-                "5",
-                "--max-time",
-                "120",
-                url,
-            ])
+            .args(["-fsSL", "--connect-timeout", "5", "--max-time", "120", url])
             .output()
             .map_err(|e| format!("could not run curl: {e}"))?;
         if !out.status.success() {
@@ -315,9 +309,8 @@ pub fn update_themes(
         if local_path.exists() {
             let backup = local_path.with_extension("bak");
             if !backup.exists() {
-                std::fs::copy(&local_path, &backup).map_err(|e| {
-                    format!("cannot back up {}: {e}", backup.display())
-                })?;
+                std::fs::copy(&local_path, &backup)
+                    .map_err(|e| format!("cannot back up {}: {e}", backup.display()))?;
                 report.backed_up.push(entry.file.clone());
             }
         }
@@ -329,9 +322,7 @@ pub fn update_themes(
         }
 
         write_bytes_atomic(&local_path, &bytes).map_err(|e| {
-            report
-                .failed
-                .push(format!("{} ({e})", entry.file));
+            report.failed.push(format!("{} ({e})", entry.file));
             format!("cannot write {}: {e}", local_path.display())
         })?;
 
@@ -360,8 +351,7 @@ fn cleanup_retired_files(
     if retired.is_empty() {
         return;
     }
-    let listed: std::collections::HashSet<&str> =
-        entries.iter().map(|e| e.file.as_str()).collect();
+    let listed: std::collections::HashSet<&str> = entries.iter().map(|e| e.file.as_str()).collect();
 
     for rel_path in collect_local_theme_files(user_dir) {
         if listed.contains(rel_path.as_str()) {
@@ -387,14 +377,14 @@ fn cleanup_retired_files(
 /// Relative paths of all theme files under `user_dir` (depth-limited,
 /// sorted; .bak/.new temp files ignored).
 fn collect_local_theme_files(user_dir: &Path) -> Vec<String> {
-    const SUPPORTED: [&str; 6] = [
-        "json", "itermcolors", "toml", "yml", "yaml", "conf",
-    ];
+    const SUPPORTED: [&str; 6] = ["json", "itermcolors", "toml", "yml", "yaml", "conf"];
     fn walk(dir: &Path, rel: &str, depth: usize, out: &mut Vec<String>) {
         if depth > 3 {
             return;
         }
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         let mut paths: Vec<_> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
         paths.sort();
         for path in paths {
@@ -489,8 +479,13 @@ pub fn apply_self_update(
     work_dir: &Path,
 ) -> Result<String, String> {
     match check_self(fetcher, current_exe, work_dir)? {
-        SelfCheck::UpToDate => Ok("TUXIXI is already up to date (binary hash matches the latest release).".to_string()),
-        SelfCheck::UpdateAvailable { local_sha256, latest_sha256 } => {
+        SelfCheck::UpToDate => Ok(
+            "TUXIXI is already up to date (binary hash matches the latest release).".to_string(),
+        ),
+        SelfCheck::UpdateAvailable {
+            local_sha256,
+            latest_sha256,
+        } => {
             let extracted = work_dir.join(BINARY_NAME_IN_TARBALL);
             let parent = current_exe
                 .parent()
@@ -506,7 +501,8 @@ pub fn apply_self_update(
                     .map_err(|e| format!("cannot create {}: {e}", staging.display()))?;
                 f.write_all(&new_bytes)
                     .map_err(|e| format!("cannot write {}: {e}", staging.display()))?;
-                f.sync_all().map_err(|e| format!("cannot sync {}: {e}", staging.display()))?;
+                f.sync_all()
+                    .map_err(|e| format!("cannot sync {}: {e}", staging.display()))?;
                 std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))
                     .map_err(|e| format!("cannot chmod {}: {e}", staging.display()))?;
             }
@@ -566,15 +562,13 @@ fn fresh_work_dir() -> Result<PathBuf, String> {
 // ----------------------------------------------------------------------
 
 /// What `tuxixi update ...` should do.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct UpdatePlan {
     pub self_update: bool,
     pub themes: bool,
     pub check_only: bool,
     pub help: bool,
 }
-
 
 /// Parse the flags after `tuxixi update`. With no target flag, both
 /// targets are updated.
@@ -643,7 +637,9 @@ pub fn run_plan(plan: &UpdatePlan) -> Result<String, String> {
         let work = fresh_work_dir()?;
         let result = if plan.check_only {
             check_self(&fetcher, &exe, &work).map(|check| match check {
-                SelfCheck::UpToDate => "SELF: already up to date (binary hash matches the latest release).".to_string(),
+                SelfCheck::UpToDate => {
+                    "SELF: already up to date (binary hash matches the latest release).".to_string()
+                }
                 SelfCheck::UpdateAvailable { .. } => {
                     "SELF: update available - run 'tuxixi update --self' to install it.".to_string()
                 }
@@ -687,8 +683,7 @@ mod tests {
             }
         }
         fn serve(&mut self, url: &str, bytes: &[u8]) -> &mut Self {
-            self.responses
-                .insert(url.to_string(), Ok(bytes.to_vec()));
+            self.responses.insert(url.to_string(), Ok(bytes.to_vec()));
             self
         }
         fn fail(&mut self, url: &str, error: &str) -> &mut Self {
@@ -783,10 +778,16 @@ mod tests {
     #[test]
     fn parse_manifest_rejects_path_traversal() {
         let good = "0".repeat(64);
-        for bad in ["../evil.json", "sub/dir.json", "/abs.json", "", "..", "a\\b.json", "other/evil.json"] {
-            let json = format!(
-                r##"{{"themes": {{"{bad}": "{good}"}}}}"##
-            );
+        for bad in [
+            "../evil.json",
+            "sub/dir.json",
+            "/abs.json",
+            "",
+            "..",
+            "a\\b.json",
+            "other/evil.json",
+        ] {
+            let json = format!(r##"{{"themes": {{"{bad}": "{good}"}}}}"##);
             assert!(
                 parse_manifest(&json).is_err(),
                 "must reject unsafe file name: {bad}"
@@ -823,14 +824,18 @@ mod tests {
         std::fs::write(dir.join("user-own.json"), b"USER-OWN").unwrap();
 
         let mut f = FakeFetcher::new();
-        let manifest = RETIRED_MANIFEST.replacen("HASH_NEW", &fake_hash("new-v1"), 1)
+        let manifest = RETIRED_MANIFEST
+            .replacen("HASH_NEW", &fake_hash("new-v1"), 1)
             .replacen("HASH_LEGACY", &fake_hash("LEGACY-CONTENT"), 1);
         f.serve(MANIFEST_URL, manifest.as_bytes());
         f.serve(&theme_raw_url("upstream/New.itermcolors"), b"new-v1");
 
         let report = update_themes(&f, &dir, false, None).unwrap();
         assert_eq!(report.removed, vec!["legacy-dark.json".to_string()]);
-        assert!(!dir.join("legacy-dark.json").exists(), "retired copy deleted");
+        assert!(
+            !dir.join("legacy-dark.json").exists(),
+            "retired copy deleted"
+        );
         assert!(dir.join("user-own.json").exists(), "user file kept");
         assert!(dir.join("upstream/New.itermcolors").exists());
         assert_eq!(report.added, vec!["upstream/New.itermcolors".to_string()]);
@@ -845,7 +850,8 @@ mod tests {
         std::fs::write(dir.join("legacy-dark.json"), b"USER EDITED").unwrap();
 
         let mut f = FakeFetcher::new();
-        let manifest = RETIRED_MANIFEST.replacen("HASH_NEW", &fake_hash("new-v1"), 1)
+        let manifest = RETIRED_MANIFEST
+            .replacen("HASH_NEW", &fake_hash("new-v1"), 1)
             .replacen("HASH_LEGACY", &fake_hash("LEGACY-CONTENT"), 1);
         f.serve(MANIFEST_URL, manifest.as_bytes());
         f.serve(&theme_raw_url("upstream/New.itermcolors"), b"new-v1");
@@ -862,13 +868,17 @@ mod tests {
         std::fs::write(dir.join("legacy-dark.json"), b"LEGACY-CONTENT").unwrap();
 
         let mut f = FakeFetcher::new();
-        let manifest = RETIRED_MANIFEST.replacen("HASH_NEW", &fake_hash("new-v1"), 1)
+        let manifest = RETIRED_MANIFEST
+            .replacen("HASH_NEW", &fake_hash("new-v1"), 1)
             .replacen("HASH_LEGACY", &fake_hash("LEGACY-CONTENT"), 1);
         f.serve(MANIFEST_URL, manifest.as_bytes());
 
         let report = update_themes(&f, &dir, true, None).unwrap();
         assert_eq!(report.removed, vec!["legacy-dark.json".to_string()]);
-        assert!(dir.join("legacy-dark.json").exists(), "dry run must not delete");
+        assert!(
+            dir.join("legacy-dark.json").exists(),
+            "dry run must not delete"
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 

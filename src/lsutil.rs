@@ -76,9 +76,7 @@ pub fn ll_entries(path: &Path) -> std::io::Result<Vec<ListEntry>> {
 fn unix_meta(meta: &std::fs::Metadata) -> (String, u32) {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let mode = meta.permissions().mode() & 0o777;
-    let owner = meta
-        .uid()
-        .to_string();
+    let owner = meta.uid().to_string();
     (owner, mode)
 }
 

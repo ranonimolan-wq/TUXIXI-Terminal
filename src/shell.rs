@@ -40,16 +40,8 @@ pub fn shell_argv(shell: &str) -> Vec<String> {
     let name = basename(shell);
     match name.as_str() {
         "fish" => vec![shell.to_string(), "-l".to_string()],
-        "zsh" => vec![
-            shell.to_string(),
-            "-l".to_string(),
-            "-i".to_string(),
-        ],
-        "bash" => vec![
-            shell.to_string(),
-            "--login".to_string(),
-            "-i".to_string(),
-        ],
+        "zsh" => vec![shell.to_string(), "-l".to_string(), "-i".to_string()],
+        "bash" => vec![shell.to_string(), "--login".to_string(), "-i".to_string()],
         _ => vec![shell.to_string(), "-i".to_string()],
     }
 }
@@ -125,7 +117,10 @@ mod tests {
     #[test]
     fn default_shell_rejects_non_executable() {
         // /etc/passwd exists but is not executable.
-        assert_eq!(default_shell(Some("/etc/passwd"), Some("/bin/sh")), "/bin/sh");
+        assert_eq!(
+            default_shell(Some("/etc/passwd"), Some("/bin/sh")),
+            "/bin/sh"
+        );
     }
 
     #[test]
@@ -135,10 +130,7 @@ mod tests {
         let bin_dir = dir.to_str().unwrap();
 
         let merged = merge_path("/usr/bin:/usr/local/bin:/usr/bin", bin_dir);
-        assert_eq!(
-            merged,
-            format!("/usr/bin:/usr/local/bin:{bin_dir}")
-        );
+        assert_eq!(merged, format!("/usr/bin:/usr/local/bin:{bin_dir}"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -158,6 +150,12 @@ mod tests {
     fn session_env_matches_python() {
         let env = session_env("/home/u/.local/opt/tuxixi/bin");
         assert_eq!(env[0], ("TUXIXI_SESSION".into(), "1".into()));
-        assert_eq!(env[1], ("TUXIXI_BIN_DIR".into(), "/home/u/.local/opt/tuxixi/bin".into()));
+        assert_eq!(
+            env[1],
+            (
+                "TUXIXI_BIN_DIR".into(),
+                "/home/u/.local/opt/tuxixi/bin".into()
+            )
+        );
     }
 }

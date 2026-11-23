@@ -38,9 +38,9 @@ use glutin::display::GetGlDisplay;
 use glutin::prelude::*;
 use glutin::surface::{GlSurface, Surface as GlutinSurface, WindowSurface};
 use glutin_winit::DisplayBuilder;
+use raw_window_handle::HasWindowHandle;
 use std::num::NonZeroU32;
 use std::sync::Arc;
-use raw_window_handle::HasWindowHandle;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
@@ -49,9 +49,9 @@ use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 use crate::font::{load_default_face, FontFace};
-use crate::gpu::{build_scene, clear_color, Atlas, GpuRenderer, GlassParams};
-use crate::input::{self, Modifiers};
+use crate::gpu::{build_scene, clear_color, Atlas, GlassParams, GpuRenderer};
 use crate::input::Key as InputKey;
+use crate::input::{self, Modifiers};
 use crate::pty::{kill_child, Pty, PtyEvent};
 use crate::render::{Palette, Selection};
 use crate::settings::{Settings, SettingsManager};
@@ -94,6 +94,26 @@ impl GlBackend {
     }
 }
 
+/// The GL initialization ladder: (transparent window, alpha size,
+/// description). Tried top to bottom — glass-capable first, then the
+/// plain configurations that work on any driver/compositor setup.
+const GL_INIT_LADDER: [(bool, u8, &str); 3] = [
+    (
+        true,
+        8,
+        "transparent window + 8-bit alpha config (glass capable)",
+    ),
+    (false, 8, "opaque window + 8-bit alpha config"),
+    (false, 0, "opaque window + no alpha requirement"),
+];
+
+/// Everything one successful GL initialization produces: the window
+/// plus the GPU backend that renders into it.
+struct CreatedGl {
+    window: Arc<Window>,
+    backend: GlBackend,
+}
+
 struct App {
     settings: Settings,
     settings_mgr: SettingsManager,
@@ -115,6 +135,91 @@ struct App {
 }
 
 impl App {
+    /// One full GL initialization attempt: config selection + window
+    /// creation + context + surface. Returns `Err` instead of panicking
+    /// so the caller can retry with a relaxed configuration.
+    ///
+    /// The config must be chosen BEFORE the window so the correct
+    /// visual/colormap is used (the GLX/EGL rule); `DisplayBuilder`
+    /// handles that in one call.
+    fn create_gl_backend(
+        el: &ActiveEventLoop,
+        transparent: bool,
+        alpha_size: u8,
+    ) -> Result<CreatedGl, String> {
+        let attrs = Window::default_attributes()
+            .with_title("TUXIXI Terminal")
+            .with_transparent(transparent)
+            .with_inner_size(PhysicalSize::new(INITIAL_SIZE.0, INITIAL_SIZE.1));
+
+        let template = ConfigTemplateBuilder::new()
+            .with_alpha_size(alpha_size)
+            .with_transparency(transparent);
+
+        let (window, gl_config) = DisplayBuilder::new()
+            .with_window_attributes(Some(attrs))
+            .build(el, template, |mut configs| {
+                configs
+                    .next()
+                    .expect("no compatible OpenGL framebuffer config")
+            })
+            .map_err(|e| format!("display/window creation: {e}"))?;
+        let window = Arc::new(window.ok_or("DisplayBuilder created no window")?);
+
+        let size = window.inner_size();
+        let gl_display = gl_config.display();
+        let raw_window = window
+            .window_handle()
+            .map_err(|e| format!("window handle: {e}"))?
+            .as_raw();
+
+        // OpenGL 3.3 core is the renderer's requirement (VAOs, instanced
+        // quads); asking explicitly makes the failure legible instead of
+        // silently handing back a legacy context the shaders can't use.
+        let context_attrs = ContextAttributesBuilder::new()
+            .with_context_api(glutin::context::ContextApi::OpenGl(Some(
+                glutin::context::Version::new(3, 3),
+            )))
+            .build(Some(raw_window));
+        let surface_attrs = glutin::surface::SurfaceAttributesBuilder::<WindowSurface>::new()
+            .build(
+                raw_window,
+                NonZeroU32::new(size.width.max(1)).expect("width >= 1"),
+                NonZeroU32::new(size.height.max(1)).expect("height >= 1"),
+            );
+
+        let not_current = unsafe { gl_display.create_context(&gl_config, &context_attrs) }
+            .map_err(|e| format!("create context: {e:?}"))?;
+        let surface = unsafe { gl_display.create_window_surface(&gl_config, &surface_attrs) }
+            .map_err(|e| format!("create surface: {e:?}"))?;
+        let context = not_current
+            .make_current(&surface)
+            .map_err(|e| format!("make current: {e:?}"))?;
+
+        // Vsync off: the terminal only redraws when content changes,
+        // so tearing on the rare updates costs less than the latency
+        // of blocking swap.
+        let _ = surface.set_swap_interval(&context, glutin::surface::SwapInterval::DontWait);
+
+        let gl = Arc::new(unsafe {
+            glow::Context::from_loader_function(|name| {
+                let name = std::ffi::CString::new(name).unwrap();
+                gl_display.get_proc_address(name.as_c_str()) as *const _
+            })
+        });
+        let renderer = GpuRenderer::new(gl.clone()).map_err(|e| format!("renderer init: {e}"))?;
+
+        Ok(CreatedGl {
+            window,
+            backend: GlBackend {
+                renderer,
+                atlas: Atlas::default(),
+                surface,
+                context,
+            },
+        })
+    }
+
     fn palette_from_settings(s: &Settings) -> Palette {
         let colors = theme::terminal_colors(&s.theme, false, s.blur_mode.as_str());
         Palette::from_terminal_colors(&colors)
@@ -175,13 +280,8 @@ impl App {
             self.glass,
         );
         let clear = clear_color(&self.palette, self.glass);
-        gl.renderer.render(
-            &scene,
-            &mut gl.atlas,
-            w as i32,
-            h as i32,
-            clear,
-        );
+        gl.renderer
+            .render(&scene, &mut gl.atlas, w as i32, h as i32, clear);
         gl.present();
     }
 
@@ -278,8 +378,8 @@ impl App {
         if !(self.mods.control_key() && self.mods.shift_key()) {
             return false;
         }
-        match key {
-            InputKey::Char('c') => {
+        match shortcut_from_key(key) {
+            Some(Shortcut::Copy) => {
                 if let Some(sel) = &self.selection {
                     let text = sel.text(&self.term);
                     if let Ok(mut clip) = arboard::Clipboard::new() {
@@ -288,7 +388,7 @@ impl App {
                 }
                 true
             }
-            InputKey::Char('v') => {
+            Some(Shortcut::Paste) => {
                 if let Ok(mut clip) = arboard::Clipboard::new() {
                     if let Ok(text) = clip.get_text() {
                         let bytes = input::encode_paste(&text, self.term.bracketed_paste());
@@ -299,7 +399,7 @@ impl App {
                 }
                 true
             }
-            InputKey::Char('t') => {
+            Some(Shortcut::CycleTheme) => {
                 if self.settings_mgr.cycle_theme() {
                     self.settings = self.settings_mgr.get().clone();
                     self.palette = Self::palette_from_settings(&self.settings);
@@ -309,7 +409,7 @@ impl App {
                 }
                 true
             }
-            InputKey::Char('g') => {
+            Some(Shortcut::ToggleGlass) => {
                 if self.settings_mgr.toggle_glass() {
                     self.settings = self.settings_mgr.get().clone();
                     self.glass = Self::glass_from_settings(&self.settings);
@@ -317,7 +417,7 @@ impl App {
                 }
                 true
             }
-            _ => false,
+            None => false,
         }
     }
 
@@ -380,77 +480,62 @@ impl ApplicationHandler<PtyEvent> for App {
             return;
         }
 
-        // The window is ALWAYS created with an alpha-capable visual so
-        // the glass mode can be toggled at runtime; when glass is off
-        // the renderer clears fully opaque, which looks identical to a
-        // plain window.
-        let attrs = Window::default_attributes()
-            .with_title("TUXIXI Terminal")
-            .with_transparent(true)
-            .with_inner_size(PhysicalSize::new(INITIAL_SIZE.0, INITIAL_SIZE.1));
-
-        let template = ConfigTemplateBuilder::new()
-            .with_alpha_size(8)
-            .with_transparency(true);
-
-        // One call: GL display + config selection + window creation
-        // (the config must be chosen BEFORE the window so the correct
-        // visual/colormap is used — the GLX rule).
-        let (window, gl_config) = DisplayBuilder::new()
-            .with_window_attributes(Some(attrs))
-            .build(el, template, |mut configs| {
-                configs
-                    .next()
-                    .expect("no compatible OpenGL config found")
-            })
-            .expect("create GL window");
-        let window = Arc::new(window.expect("DisplayBuilder must create a window"));
-        self.window = Some(window.clone());
-
-        let size = window.inner_size();
-        let gl_display = gl_config.display();
-        let raw_window = window.window_handle().expect("window handle").as_raw();
-        let context_attrs = ContextAttributesBuilder::new().build(Some(raw_window));
-        let surface_attrs = glutin::surface::SurfaceAttributesBuilder::<WindowSurface>::new()
-            .build(
-                raw_window,
-                NonZeroU32::new(size.width.max(1)).unwrap(),
-                NonZeroU32::new(size.height.max(1)).unwrap(),
-            );
-
-        let not_current = unsafe {
-            gl_display
-                .create_context(&gl_config, &context_attrs)
-                .expect("create OpenGL context")
+        // GL initialization ladder (Alacritty-style fallbacks): the
+        // most capable configuration first, then progressively relaxed
+        // ones. Glass needs a transparent window over an 8-bit-alpha
+        // framebuffer config, but on systems without a compositor — or
+        // with drivers that refuse to match an alpha visual to the X
+        // window — EGL answers EGL_BAD_MATCH (12297) and the context
+        // creation dies. Instead of one hard-coded attempt, each
+        // rung is tried in order; the first one that sticks wins.
+        let mut created: Option<CreatedGl> = None;
+        for (transparent, alpha, label) in GL_INIT_LADDER {
+            // `DisplayBuilder`'s config picker can only signal "no
+            // config" by panicking, so each rung is unwound-safe caught:
+            // a panic is treated like any other failure and the ladder
+            // moves on to the next rung. The default panic hook is
+            // muted during the attempt so expected fallbacks don't
+            // print scary backtraces.
+            let prev_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(|_| {}));
+            let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Self::create_gl_backend(el, transparent, alpha)
+            }));
+            std::panic::set_hook(prev_hook);
+            match attempt {
+                Ok(Ok(c)) => {
+                    eprintln!("OpenGL: initialized with {label}");
+                    created = Some(c);
+                    break;
+                }
+                Ok(Err(e)) => {
+                    eprintln!("OpenGL init failed ({label}): {e} — trying the next configuration")
+                }
+                Err(panic) => {
+                    let msg = panic_message(&*panic);
+                    eprintln!(
+                        "OpenGL init failed ({label}): {msg} — trying the next configuration"
+                    );
+                }
+            }
+        }
+        let CreatedGl { window, backend } = match created {
+            Some(c) => c,
+            None => {
+                eprintln!(
+                    "fatal: no OpenGL configuration could be initialized.\n\
+                     Hints: install Mesa DRI drivers (libgl1-mesa-dri, libegl-mesa0),\n\
+                     or force software rendering with LIBGL_ALWAYS_SOFTWARE=1."
+                );
+                self.exiting_cleanup();
+                el.exit();
+                return;
+            }
         };
-        let surface = unsafe {
-            gl_display
-                .create_window_surface(&gl_config, &surface_attrs)
-                .expect("create GL window surface")
-        };
+        self.window = Some(window);
+        self.gl = Some(backend);
 
-        let context = not_current.make_current(&surface).expect("make GL context current");
-
-        // Vsync off: the terminal only redraws when content changes,
-        // so tearing on the rare updates costs less than the latency
-        // of blocking swap.
-        let _ = surface.set_swap_interval(&context, glutin::surface::SwapInterval::DontWait);
-
-        let gl = Arc::new(unsafe {
-            glow::Context::from_loader_function(|name| {
-                let name = std::ffi::CString::new(name).unwrap();
-                gl_display.get_proc_address(name.as_c_str()) as *const _
-            })
-        });
-        let renderer = GpuRenderer::new(gl.clone()).expect("initialize GL renderer");
-
-        self.gl = Some(GlBackend {
-            renderer,
-            atlas: Atlas::default(),
-            surface,
-            context,
-        });
-
+        let window = self.window.clone().expect("just set");
         self.x11_window_id = x11_window_id(&window);
         if self.glass.enabled {
             if let Some(id) = self.x11_window_id {
@@ -575,8 +660,7 @@ impl ApplicationHandler<PtyEvent> for App {
                 if self.scroll_offset != 0 {
                     self.scroll_offset = 0;
                 }
-                if let Some(bytes) = input::encode(key, self.modifiers(), self.term.app_cursor())
-                {
+                if let Some(bytes) = input::encode(key, self.modifiers(), self.term.app_cursor()) {
                     if let Some(pty) = &self.pty {
                         pty.write(&bytes);
                     }
@@ -676,6 +760,45 @@ impl App {
     }
 }
 
+/// The Ctrl+Shift GUI shortcuts, resolved from a key event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Shortcut {
+    Copy,
+    Paste,
+    CycleTheme,
+    ToggleGlass,
+}
+
+/// Resolve a key event to its Ctrl+Shift shortcut.
+///
+/// The match is case-insensitive on purpose: with Shift held, winit
+/// reports the logical key as the shifted (uppercase) character, so
+/// Ctrl+Shift+T arrives as `Char('T')` — matching only `'t'` would
+/// leave the shortcut permanently dead (found by live Xvfb testing).
+fn shortcut_from_key(key: &InputKey) -> Option<Shortcut> {
+    let c = match key {
+        InputKey::Char(c) => c.to_ascii_lowercase(),
+        _ => return None,
+    };
+    match c {
+        'c' => Some(Shortcut::Copy),
+        'v' => Some(Shortcut::Paste),
+        't' => Some(Shortcut::CycleTheme),
+        'g' => Some(Shortcut::ToggleGlass),
+        _ => None,
+    }
+}
+
+/// Extract a human-readable message from a caught panic payload
+/// (the config picker can only signal "no config" by panicking).
+fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "panic during GL initialization".into())
+}
+
 /// X11 window id from the winit window (for the glass blur property).
 /// None on Wayland / macOS / Windows.
 fn x11_window_id(window: &Window) -> Option<u32> {
@@ -755,5 +878,201 @@ pub fn run() {
 
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("event loop error: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- shortcut resolution (the Ctrl+Shift+C/V/T/G bug) ----
+
+    #[test]
+    fn shortcuts_resolve_from_uppercase_shifted_keys() {
+        // With Shift held, winit reports the logical key uppercase.
+        assert_eq!(
+            shortcut_from_key(&InputKey::Char('C')),
+            Some(Shortcut::Copy)
+        );
+        assert_eq!(
+            shortcut_from_key(&InputKey::Char('V')),
+            Some(Shortcut::Paste)
+        );
+        assert_eq!(
+            shortcut_from_key(&InputKey::Char('T')),
+            Some(Shortcut::CycleTheme)
+        );
+        assert_eq!(
+            shortcut_from_key(&InputKey::Char('G')),
+            Some(Shortcut::ToggleGlass)
+        );
+    }
+
+    #[test]
+    fn shortcuts_resolve_from_lowercase_keys() {
+        assert_eq!(
+            shortcut_from_key(&InputKey::Char('c')),
+            Some(Shortcut::Copy)
+        );
+        assert_eq!(
+            shortcut_from_key(&InputKey::Char('v')),
+            Some(Shortcut::Paste)
+        );
+        assert_eq!(
+            shortcut_from_key(&InputKey::Char('t')),
+            Some(Shortcut::CycleTheme)
+        );
+        assert_eq!(
+            shortcut_from_key(&InputKey::Char('g')),
+            Some(Shortcut::ToggleGlass)
+        );
+    }
+
+    #[test]
+    fn non_shortcut_keys_resolve_to_none() {
+        assert_eq!(shortcut_from_key(&InputKey::Char('x')), None);
+        assert_eq!(shortcut_from_key(&InputKey::Char('1')), None);
+        assert_eq!(shortcut_from_key(&InputKey::Enter), None);
+        assert_eq!(shortcut_from_key(&InputKey::PageUp), None);
+        assert_eq!(shortcut_from_key(&InputKey::F(5)), None);
+    }
+
+    #[test]
+    fn shortcut_resolution_is_case_insensitive_and_exhaustive() {
+        // Every shortcut must resolve identically in both cases.
+        for (lower, upper) in [('c', 'C'), ('v', 'V'), ('t', 'T'), ('g', 'G')] {
+            assert_eq!(
+                shortcut_from_key(&InputKey::Char(lower)),
+                shortcut_from_key(&InputKey::Char(upper)),
+                "shortcut '{lower}'/'{upper}' must be case-insensitive"
+            );
+        }
+        // Exactly four shortcuts exist.
+        let resolved: std::collections::HashSet<_> = [
+            InputKey::Char('c'),
+            InputKey::Char('v'),
+            InputKey::Char('t'),
+            InputKey::Char('g'),
+        ]
+        .iter()
+        .map(|k| shortcut_from_key(k).expect("must resolve"))
+        .collect();
+        assert_eq!(resolved.len(), 4, "four distinct shortcuts expected");
+    }
+
+    #[test]
+    fn gl_ladder_starts_glass_capable_and_ends_fully_relaxed() {
+        let first = GL_INIT_LADDER[0];
+        let last = GL_INIT_LADDER[GL_INIT_LADDER.len() - 1];
+        // Rung 1 must be the glass-capable configuration: transparent
+        // window over an 8-bit-alpha framebuffer config.
+        assert!(first.0, "rung 1 must request a transparent window");
+        assert_eq!(first.1, 8, "rung 1 must require an 8-bit alpha config");
+        // The last rung must work on any driver: no transparency, no
+        // alpha requirement.
+        assert!(!last.0, "last rung must not require transparency");
+        assert_eq!(last.1, 0, "last rung must not require an alpha config");
+        // Every rung has a human-readable label for the failure log.
+        for (_, _, label) in GL_INIT_LADDER {
+            assert!(!label.is_empty());
+        }
+    }
+
+    #[test]
+    fn gl_ladder_rungs_are_monotonically_relaxed() {
+        // Each rung must be at most as strict as the previous one: the
+        // alpha requirement never grows back and a dropped transparency
+        // requirement never returns.
+        for pair in GL_INIT_LADDER.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            assert!(
+                b.1 <= a.1,
+                "alpha requirement must never grow: {a:?} -> {b:?}"
+            );
+            if !a.0 {
+                assert!(!b.0, "transparency must never come back: {a:?} -> {b:?}");
+            }
+        }
+        // The ladder must actually relax somewhere: the last rung is
+        // strictly less strict than the first (the whole point of the
+        // EGL_BAD_MATCH fallback).
+        let first = GL_INIT_LADDER[0];
+        let last = GL_INIT_LADDER[GL_INIT_LADDER.len() - 1];
+        assert!(
+            (first.0 && !last.0) || first.1 > last.1,
+            "the last rung must be strictly more relaxed than the first"
+        );
+    }
+
+    #[test]
+    fn panic_message_extracts_str_payloads() {
+        let msg = panic_message(&"no compatible OpenGL framebuffer config");
+        assert_eq!(msg, "no compatible OpenGL framebuffer config");
+    }
+
+    #[test]
+    fn panic_message_extracts_string_payloads() {
+        let msg = panic_message(&String::from("EGL_BAD_MATCH"));
+        assert_eq!(msg, "EGL_BAD_MATCH");
+    }
+
+    #[test]
+    fn panic_message_falls_back_for_opaque_payloads() {
+        // A payload the helper cannot inspect (e.g. a custom type) must
+        // produce the generic message, never panic itself.
+        struct Opaque;
+        let msg = panic_message(&Opaque);
+        assert_eq!(msg, "panic during GL initialization");
+    }
+
+    #[test]
+    fn panicked_config_picker_is_reported_not_fatal() {
+        // The resumed() ladder treats a panic inside the config picker
+        // exactly like any other failure: the message is extracted and
+        // the next rung is tried. Simulate the full ladder contract
+        // without a real display by driving the same match arms over
+        // simulated attempts.
+        let attempts: [Result<&str, String>; 3] = [
+            Err("display/window creation: EGL_BAD_MATCH".into()),
+            Err("display/window creation: GLXBadMatch".into()),
+            Ok("rung 3"),
+        ];
+        let mut chosen = None;
+        for attempt in attempts {
+            match attempt {
+                Ok(c) => {
+                    chosen = Some(c);
+                    break;
+                }
+                Err(e) => eprintln!("simulated: {e}"),
+            }
+        }
+        assert_eq!(
+            chosen,
+            Some("rung 3"),
+            "the ladder must keep going past failures"
+        );
+    }
+
+    #[test]
+    fn catch_unwind_recovers_a_panicking_rung() {
+        // The exact pattern used in resumed(): a panicking rung must be
+        // converted into a reported error, not crash the process.
+        let prev_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<&str, String> {
+                panic!("no compatible OpenGL framebuffer config");
+            }));
+        std::panic::set_hook(prev_hook);
+        match result {
+            Err(panic) => {
+                assert_eq!(
+                    panic_message(&*panic),
+                    "no compatible OpenGL framebuffer config"
+                );
+            }
+            Ok(_) => panic!("the rung must have panicked"),
+        }
     }
 }

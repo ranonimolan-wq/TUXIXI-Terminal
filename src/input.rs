@@ -244,7 +244,12 @@ mod tests {
     };
 
     fn mods(ctrl: bool, alt: bool, shift: bool) -> Modifiers {
-        Modifiers { ctrl, alt, shift, logo: false }
+        Modifiers {
+            ctrl,
+            alt,
+            shift,
+            logo: false,
+        }
     }
 
     fn bytes(s: &str) -> Vec<u8> {
@@ -376,7 +381,10 @@ mod tests {
         assert_eq!(encode(Key::Insert, NONE, false), Some(b"\x1b[2~".to_vec()));
         assert_eq!(encode(Key::Delete, NONE, false), Some(b"\x1b[3~".to_vec()));
         assert_eq!(encode(Key::PageUp, NONE, false), Some(b"\x1b[5~".to_vec()));
-        assert_eq!(encode(Key::PageDown, NONE, false), Some(b"\x1b[6~".to_vec()));
+        assert_eq!(
+            encode(Key::PageDown, NONE, false),
+            Some(b"\x1b[6~".to_vec())
+        );
         assert_eq!(
             encode(Key::Delete, mods(true, false, false), false),
             Some(b"\x1b[3;5~".to_vec())
@@ -418,14 +426,13 @@ mod tests {
 
     #[test]
     fn logo_modifier_never_swallows_os_shortcuts() {
-        for key in [
-            Key::Char('t'),
-            Key::Up,
-            Key::Tab,
-            Key::Enter,
-            Key::Escape,
-        ] {
-            let m = Modifiers { logo: true, ctrl: false, alt: false, shift: false };
+        for key in [Key::Char('t'), Key::Up, Key::Tab, Key::Enter, Key::Escape] {
+            let m = Modifiers {
+                logo: true,
+                ctrl: false,
+                alt: false,
+                shift: false,
+            };
             assert_eq!(encode(key, m, false), None);
         }
     }
@@ -442,10 +449,7 @@ mod tests {
     #[test]
     fn paste_wraps_in_brackets_when_requested() {
         let out = encode_paste("hello", true);
-        assert_eq!(
-            String::from_utf8(out).unwrap(),
-            "\x1b[200~hello\x1b[201~"
-        );
+        assert_eq!(String::from_utf8(out).unwrap(), "\x1b[200~hello\x1b[201~");
     }
 
     #[test]

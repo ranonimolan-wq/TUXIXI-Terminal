@@ -5,10 +5,9 @@
 //! * `tuxixi update`, `tuxixi theme`, `tuxixi ll`, `tuxixi cls` ->
 //!   subcommands used by
 //!   the shell wrappers installed next to the binary.
-//! * `tuxixi` with no arguments -> the GTK4 GUI when built with
+//! * `tuxixi` with no arguments -> the winit GUI when built with
 //!   `--features gui`, otherwise a helpful error.
-//! * anything else -> "Unknown command" + exit code 2 (never passed to
-//!   GTK, which would try to open the argument as a file).
+//! * anything else -> "Unknown command" + exit code 2.
 
 use std::process::ExitCode;
 
@@ -40,7 +39,8 @@ fn main() -> ExitCode {
     }
 
     // Anything that is not a known command is an error in every build
-    // configuration (never let GTK try to open unknown arguments as files).
+    // configuration (never let the GUI try to open unknown arguments
+    // as files).
     if !args.is_empty() {
         eprintln!(
             "{}Unknown command:{} {}",
@@ -71,9 +71,7 @@ fn main() -> ExitCode {
             tuxixi::sysinfo::RESET
         );
         eprintln!("Build it with: cargo build --release --features gui");
-        eprintln!(
-            "(requires libgtk-4-dev and libvte-2.91-gtk4-dev / VTE 3.91)"
-        );
+        eprintln!("(no system libraries needed - the GUI is pure winit)");
         ExitCode::from(1)
     }
 }

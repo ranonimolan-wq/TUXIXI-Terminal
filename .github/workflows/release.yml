@@ -25,10 +25,17 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install GTK4 / VTE dev libraries
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libvte-2.91-gtk4-dev
+      # No system packages needed any more: the GUI is pure Rust
+      # (winit + softbuffer + ab_glyph). GTK4/VTE were removed.
+
+      - name: Test (core, no GUI feature)
+        run: cargo test
+
+      - name: Test (with GUI feature, includes PTY + renderer tests)
+        run: cargo test --features gui
+
+      - name: Lint
+        run: cargo clippy --features gui --all-targets -- -D warnings
 
       - name: Build GUI binary
         run: cargo build --release --features gui

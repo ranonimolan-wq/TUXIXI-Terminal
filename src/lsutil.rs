@@ -1,7 +1,7 @@
-//! Ports of the tiny shell utilities shipped in the repo root:
-//! * `ll`  -> `ls -lah --color=auto --group-directories-first` (replaced
-//!            by a self-contained, human-readable listing)
-//! * `cls` -> `clear` with an ANSI fallback
+//! Ports of the tiny shell utilities shipped in the repo root.
+//! `ll` -> `ls -lah --color=auto --group-directories-first`, replaced
+//! by a self-contained, human-readable listing; `cls` -> `clear` with
+//! an ANSI fallback.
 
 use std::path::Path;
 

@@ -567,6 +567,7 @@ fn fresh_work_dir() -> Result<PathBuf, String> {
 
 /// What `tuxixi update ...` should do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub struct UpdatePlan {
     pub self_update: bool,
     pub themes: bool,
@@ -574,16 +575,6 @@ pub struct UpdatePlan {
     pub help: bool,
 }
 
-impl Default for UpdatePlan {
-    fn default() -> Self {
-        Self {
-            self_update: false,
-            themes: false,
-            check_only: false,
-            help: false,
-        }
-    }
-}
 
 /// Parse the flags after `tuxixi update`. With no target flag, both
 /// targets are updated.

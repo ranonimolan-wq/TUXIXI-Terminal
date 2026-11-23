@@ -1,14 +1,16 @@
 //! Integration tests: run the whole CLI through its public interface
-//! and verify cross-module behavior (settings <-> css, themes <-> cli).
+//! and verify cross-module behavior (settings <-> theme pipeline,
+//! themes <-> cli, input encoding <-> vt state).
 
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
 use tuxixi::cli;
-use tuxixi::css::build_css;
+use tuxixi::input::{self, Key, Modifiers};
 use tuxixi::settings::{BlurMode, Settings, SettingsManager};
 use tuxixi::theme::{get_colors, Registry};
+use tuxixi::vt::Terminal;
 
 fn tempdir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -45,23 +47,20 @@ fn full_cli_dispatch_matrix() {
 }
 
 #[test]
-fn settings_changes_flow_into_css_and_colors() {
+fn settings_changes_flow_into_terminal_colors() {
     let dir = tempdir("flow");
     let path = dir.join("config.json");
     let mut mgr = SettingsManager::load(&path);
 
-    // Default: opaque theme background (default theme: Tokyo Night).
+    // Default: opaque Tokyo Night background.
     let s = mgr.get().clone();
-    let css = build_css(&s.theme, s.transparent, s.blur_mode);
-    assert!(css.contains("#1A1B26"));
+    let colors = tuxixi::theme::terminal_colors(&s.theme, false, "off");
+    assert_eq!(colors.background, tuxixi::theme::Rgba::opaque("#1A1B26"));
 
-    // Toggle transparency: CSS and terminal colors must switch to glass.
-    mgr.toggle_transparency();
-    let s = mgr.get().clone();
-    let css = build_css(&s.theme, s.transparent, s.blur_mode);
-    assert!(css.contains("alpha(#000000, 0.52)"));
-    let (bg, _fg) = get_colors(&s.theme, s.transparent, s.blur_mode.as_str());
+    // Glass mode: background goes fully transparent, fg survives.
+    let (bg, fg) = get_colors(&s.theme, true, "glass");
     assert_eq!(bg.a, 0.0);
+    assert_eq!(fg, colors.foreground);
 
     // Cycle blur: off -> static -> smoky -> off.
     mgr.cycle_blur_mode();
@@ -75,16 +74,43 @@ fn settings_changes_flow_into_css_and_colors() {
 }
 
 #[test]
+fn vt_grid_renders_theme_foreground_characters() {
+    // End-to-end: settings -> theme colors -> VT grid -> input bytes.
+    let mut t = Terminal::new(20, 4);
+    t.feed(b"TUXIXI \x1b[32mgreen\x1b[0m");
+    assert_eq!(t.cell(0, 0).unwrap().c, 'T');
+    assert_eq!(t.cell(7, 0).unwrap().fg, tuxixi::vt::Color::Indexed(2));
+
+    // Typing "q" through the input encoder feeds the same grid.
+    let bytes = input::encode(Key::Char('q'), Modifiers::default(), false).unwrap();
+    assert_eq!(bytes, b"q");
+}
+
+#[test]
+fn vt_scrollback_is_hard_capped_end_to_end() {
+    let mut t = Terminal::new(20, 4);
+    t.set_scrollback_cap(25);
+    for i in 0..1000 {
+        t.feed(format!("line{i}\r\n").as_bytes());
+    }
+    assert!(t.scrollback_len() <= 25);
+    let report = t.memory_report();
+    assert!(report.scrollback_rows <= 25);
+    assert_eq!(report.live_cells, 20 * 4);
+}
+
+#[test]
 fn settings_survive_reload_with_full_content() {
     let dir = tempdir("reload");
     let path = dir.join("nested").join("config.json");
     let mut mgr = SettingsManager::load(&path);
-    let mut s = Settings::default();
-    s.font = "JetBrains Mono".into();
-    s.font_size = 19;
-    s.theme = "Dracula".into();
-    s.transparent = true;
-    s.blur_mode = BlurMode::Smoky;
+    let s = Settings {
+        font: "JetBrains Mono".into(),
+        font_size: 19,
+        theme: "Dracula".into(),
+        transparent: true,
+        blur_mode: BlurMode::Smoky,
+    };
     mgr.set(s.clone());
 
     let mgr2 = SettingsManager::load(&path);
@@ -135,6 +161,9 @@ fn installed_binary_unknown_command_exits_2() {
     assert!(err.contains("Unknown command"));
 }
 
+// Only meaningful for CLI-only builds: with `gui` the binary opens a
+// real terminal window (which a headless test host cannot do).
+#[cfg(not(feature = "gui"))]
 #[test]
 fn installed_binary_no_args_exits_2() {
     let exe = env!("CARGO_BIN_EXE_tuxixi");

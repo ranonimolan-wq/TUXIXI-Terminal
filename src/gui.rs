@@ -1,752 +1,544 @@
-//! GTK4 GUI port of `main.py`, `ui.py` and `terminal.py`.
+//! The winit GUI of TUXIXI — a from-scratch rewrite of the GTK4 port.
 //!
-//! Requires the `gui` feature (gtk4 + vte4 crates and the matching
-//! system libraries: GTK4 and VTE 3.91):
+//! Why rewrite? The GTK build idled at ~240 MB: GLib main loop, the
+//! GSK renderers, VTE's grid state, fontconfig/Pango caches and the
+//! GObject type system all allocate on startup and never give it back.
+//! Alacritty shows what a terminal can weigh, so the GUI is built the
+//! same way Alacritty is:
 //!
-//! ```sh
-//! cargo build --release --features gui
-//! ```
+//! * windowing/event loop: `winit` (no toolkit, no main-loop runtime),
+//! * rendering: `softbuffer` CPU framebuffer, repainted only when the
+//!   PTY, the input or the scroll offset actually change,
+//! * fonts: `ab_glyph`, rasterized on demand into a bounded cache,
+//! * terminal emulation: our own grid + the `vte` parser (`crate::vt`),
+//! * PTY: our own fork/exec (`crate::pty`),
+//! * memory: every buffer is bounded and trimmed explicitly
+//!   (`crate::mem`, `Terminal::memory_report`).
 //!
-//! This module mirrors the Python application:
-//! * one `Gtk.Application` (`org.tuxixi.Terminal`) with global CSS,
-//! * a window with a slim tab bar (`+` button, blur badge),
-//! * per-tab independent VTE sessions spawning the user's shell,
-//! * all the Ctrl+Shift / Alt keyboard shortcuts,
-//! * glass / static blur / smoky blur modes driven by settings.
+//! Shortcuts:
+//! * Ctrl+Shift+C / Ctrl+Shift+V — copy selection / paste
+//! * Ctrl+Shift+T — cycle theme (persisted via the settings file)
+//! * Ctrl+= / Ctrl+- — font size up / down (persisted)
+//! * Shift+PageUp / Shift+PageDown, mouse wheel — scrollback
 //!
-//! The headless test suite cannot exercise widgets, so this module is
-//! written conservatively using only core gtk4-rs/vte4 APIs.
+//! Tabs were a GTK-only construct (one GObject stack per tab was a
+//! large share of the idle memory); this build intentionally opens one
+//! window per terminal, like Alacritty.
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::Arc;
 
-use gtk4::gdk;
-use gtk4::gio;
-use gtk4::glib;
-use gtk4::prelude::*;
-use gtk4::{
-    Application, ApplicationWindow, Button, CssProvider, EventControllerKey, EventControllerMotion,
-    GestureClick, Label, Orientation, Overlay, Picture, PolicyType, ScrolledWindow, Stack,
-};
-use vte4::prelude::*;
-use vte4::Terminal as VteTerminal;
+use softbuffer::{Context, Surface};
+use winit::application::ApplicationHandler;
+use winit::dpi::PhysicalSize;
+use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
+use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
+use winit::window::{Window, WindowId};
 
-use crate::settings::{SettingsManager, BlurMode, Settings};
+use crate::font::{load_default_face, FontFace};
+use crate::input::{self, Modifiers};
+use crate::input::Key as InputKey;
+use crate::pty::{kill_child, Pty, PtyEvent};
+use crate::render::{paint, Palette, Selection};
+use crate::settings::{BlurMode, Settings, SettingsManager};
 use crate::shell;
-#[allow(unused_imports)]
 use crate::theme;
-use crate::title;
-use crate::wallpaper;
+use crate::vt::Terminal;
 
-pub const APP_ID: &str = "org.tuxixi.Terminal";
+/// Initial window size in pixels.
+const INITIAL_SIZE: (u32, u32) = (960, 600);
+/// Font size bounds (mirrors the settings manager clamp).
+const MIN_PX: i32 = 6;
+const MAX_PX: i32 = 40;
+/// Lines per mouse-wheel notch.
+const WHEEL_STEP: f32 = 3.0;
 
-struct Tab {
-    vte: VteTerminal,
-    widget: gtk4::Box,
-    item: TabItem,
+struct App {
+    settings: Settings,
+    settings_mgr: SettingsManager,
+    term: Terminal,
+    pty: Option<Pty>,
+    face: FontFace,
+    palette: Palette,
+    scroll_offset: usize,
+    mods: ModifiersState,
+    window: Option<Arc<Window>>,
+    context: Option<Context<Arc<Window>>>,
+    surface: Option<Surface<Arc<Window>, Arc<Window>>>,
+    frame: Vec<u32>,
+    selection: Option<Selection>,
+    select_anchor: Option<(u16, u16)>,
+    mouse_pos: (i32, i32),
+    proxy: EventLoopProxy<PtyEvent>,
 }
 
-/// Shared window state, owned through `Rc<RefCell<...>>` because the
-/// widgets and their closures all reference it.
-struct TuxixiWindow {
-    window: ApplicationWindow,
-    static_bg_container: gtk4::Box,
-    tabs_box: gtk4::Box,
-    tabs_scroller: ScrolledWindow,
-    stack: Stack,
-    blur_badge: Label,
-    settings: Rc<RefCell<SettingsManager>>,
-    tabs: Vec<Tab>,
-    uid_seq: usize,
-}
-
-type WindowRef = Rc<RefCell<TuxixiWindow>>;
-
-impl TuxixiWindow {
-    fn build(app: &Application, settings: Rc<RefCell<SettingsManager>>) -> WindowRef {
-        let window = ApplicationWindow::builder()
-            .application(app)
-            .title("TUXIXI")
-            .default_width(700)
-            .default_height(450)
-            .build();
-
-        let overlay = Overlay::new();
-        window.set_child(Some(&overlay));
-
-        // Static blur background layer (hidden by default).
-        let static_bg_container = gtk4::Box::new(Orientation::Vertical, 0);
-        static_bg_container.set_hexpand(true);
-        static_bg_container.set_vexpand(true);
-        static_bg_container.set_can_target(false);
-        static_bg_container.set_visible(false);
-        overlay.set_child(Some(&static_bg_container));
-        setup_static_blur_layer(&static_bg_container);
-
-        let root_box = gtk4::Box::new(Orientation::Vertical, 0);
-        root_box.set_hexpand(true);
-        root_box.set_vexpand(true);
-        overlay.add_overlay(&root_box);
-
-        let tabbar = gtk4::Box::new(Orientation::Horizontal, 4);
-        tabbar.add_css_class("tuxixi-tabbar");
-
-        let tabs_scroller = ScrolledWindow::new();
-        tabs_scroller.set_policy(PolicyType::External, PolicyType::Never);
-        tabs_scroller.set_hexpand(true);
-
-        let tabs_box = gtk4::Box::new(Orientation::Horizontal, 4);
-        tabs_scroller.set_child(Some(&tabs_box));
-        tabbar.append(&tabs_scroller);
-
-        let blur_badge = Label::new(None);
-        blur_badge.add_css_class("tuxixi-blur-badge");
-        blur_badge.set_visible(false);
-        tabbar.append(&blur_badge);
-
-        let add_tab_btn = Button::with_label("+");
-        add_tab_btn.add_css_class("tuxixi-tab-add");
-        add_tab_btn.set_can_focus(false);
-        add_tab_btn.set_tooltip_text(Some("New Tab (Ctrl+Shift+Enter)"));
-
-        root_box.append(&tabbar);
-
-        let stack = Stack::new();
-        stack.set_transition_type(gtk4::StackTransitionType::None);
-        stack.set_hexpand(true);
-        stack.set_vexpand(true);
-        root_box.append(&stack);
-
-        let this: WindowRef = Rc::new(RefCell::new(TuxixiWindow {
-            window,
-            static_bg_container,
-            tabs_box,
-            tabs_scroller,
-            stack,
-            blur_badge,
-            settings,
-            tabs: Vec::new(),
-            uid_seq: 0,
-        }));
-
-        // "+" button -> new independent tab (every tab starts at ~).
-        {
-            let this = this.clone();
-            add_tab_btn.connect_clicked(move |_| {
-                Self::add_tab(&this);
-            });
-        }
-        tabbar.append(&add_tab_btn);
-
-        // First tab + initial blur badge state.
-        Self::add_tab(&this);
-        {
-            let s0 = this.borrow().settings.borrow().get().clone();
-            this.borrow().apply_blur_state(&s0);
-            this.borrow().apply_fonts(&s0);
-            this.borrow().apply_colors(&s0);
-        }
-
-        // Live visual updates: whenever any setting actually changes
-        // (theme / glass / blur / font), refresh the blur badge and the
-        // terminal fonts. The global CSS is refreshed by its own
-        // listener registered in `apply_global_css`. The listener gets
-        // the new Settings snapshot, so it never re-borrows `settings`
-        // (which is still mutably borrowed inside `cycle_theme` etc.).
-        {
-            let this = this.clone();
-            let settings_rc = this.borrow().settings.clone();
-            settings_rc.borrow_mut().on_change(std::rc::Rc::new(move |s| {
-                let b = this.borrow();
-                b.apply_blur_state(s);
-                b.apply_fonts(s);
-                b.apply_colors(s);
-            }));
-        }
-
-        this
+impl App {
+    fn palette_from_settings(s: &Settings) -> Palette {
+        let colors = theme::terminal_colors(&s.theme, false, BlurMode::Off.as_str());
+        Palette::from_terminal_colors(&colors)
     }
 
-    fn add_tab(this: &WindowRef) {
-        let (uid, tab_number) = {
-            let mut b = this.borrow_mut();
-            b.uid_seq += 1;
-            (b.uid_seq, b.tabs.len() + 1)
-        };
-        let page_name = format!("tab-{uid}");
-
-        let vte = VteTerminal::new();
-        vte.set_hexpand(true);
-        vte.set_vexpand(true);
-        vte.set_scrollback_lines(10000);
-        vte.set_cursor_blink_mode(vte4::CursorBlinkMode::System);
-        vte.set_cursor_shape(vte4::CursorShape::Block);
-
-        let widget = gtk4::Box::new(Orientation::Vertical, 0);
-        widget.append(&vte);
-
-        let item = TabItem::new(&format!("{tab_number}: ~"));
-
-        // Clicking the tab selects it.
-        {
-            let this = this.clone();
-            let vte_for_select = vte.clone();
-            item.set_on_select(move || {
-                Self::select_tab(&this, &vte_for_select);
-            });
+    fn reload_face(&mut self) {
+        let px = self.settings.font_size as f32;
+        match load_default_face(&self.settings.font, px) {
+            Ok(face) => self.face = face,
+            Err(e) => eprintln!("font reload failed, keeping old face: {e}"),
         }
-        // Closing (button or middle click).
-        {
-            let this = this.clone();
-            let vte_for_close = vte.clone();
-            item.set_on_close(move || {
-                Self::close_tab(&this, &vte_for_close);
-            });
-        }
-
-        this.borrow_mut().tabs_box.append(&item.widget);
-
-        this.borrow_mut().tabs.push(Tab {
-            vte: vte.clone(),
-            widget: widget.clone(),
-            item,
-        });
-        this.borrow_mut().stack.add_named(&widget, Some(&page_name));
-
-        // Terminal behaviors: shortcuts, shell session, title tracking.
-        setup_key_controller(&vte, this.clone());
-        setup_session(&vte);
-
-        // A new tab must open with the CURRENTLY selected theme and font
-        // immediately. Previously colors/fonts were only applied by the
-        // settings-change listener, so a tab created after startup (+
-        // button / Ctrl+Shift+Enter) came up with VTE's default dark
-        // colors until the next theme/font change - the reported "yeni
-        // sekme seçtigim temayla açılamdı" bug.
-        {
-            let s = this.borrow().settings.borrow().get().clone();
-            Self::apply_font_to(&vte, &s);
-            Self::apply_vte_colors(&vte, &theme::terminal_colors(&s.theme, s.transparent, s.blur_mode.as_str()));
-        }
-        {
-            let this = this.clone();
-            vte.connect_window_title_changed(move |_| {
-                Self::refresh_tab_titles(&this);
-            });
-        }
-        // Exiting the shell (e.g. `exit`, Ctrl+D) closes the tab.
-        {
-            let this = this.clone();
-            let vte_for_exit = vte.clone();
-            vte.connect_child_exited(move |_, _status| {
-                Self::close_tab(&this, &vte_for_exit);
-            });
-        }
-
-        Self::refresh_tab_titles(this);
-        Self::select_tab(this, &vte);
     }
 
-    fn find_index(borrowed: &TuxixiWindow, vte: &VteTerminal) -> Option<usize> {
-        borrowed.tabs.iter().position(|t| t.vte == *vte)
+    fn grid_size_for(&self, w: u32, h: u32) -> (u16, u16) {
+        let cw = self.face.metrics.cell_width.max(1);
+        let lh = self.face.metrics.line_height.max(1);
+        let cols = ((w / cw) as u16).clamp(2, 500);
+        let rows = ((h / lh) as u16).clamp(2, 200);
+        (cols, rows)
     }
 
-    fn select_tab(this: &WindowRef, vte: &VteTerminal) {
-        let index = {
-            let b = this.borrow();
-            Self::find_index(&b, vte)
-        };
-        let Some(index) = index else { return };
-        let b = this.borrow();
-        for (i, tab) in b.tabs.iter().enumerate() {
-            tab.item.set_active(i == index);
-        }
-        let tab = &b.tabs[index];
-        b.stack.set_visible_child(&tab.widget);
-        tab.vte.grab_focus();
-        let dyn_title = dynamic_title(&tab.vte);
-        b.window
-            .set_title(Some(&title::window_title(Some(&dyn_title))));
-        let hadj = b.tabs_scroller.hadjustment();
-        let max = (hadj.upper() - hadj.page_size()).max(hadj.lower());
-        hadj.set_value(max);
-    }
-
-    fn switch_tab_relative(this: &WindowRef, delta: i32) {
-        let len = this.borrow().tabs.len();
-        if len <= 1 {
-            return;
-        }
-        let active = this.borrow().stack.visible_child();
-        let current = this
-            .borrow()
-            .tabs
-            .iter()
-            .position(|t| Some(t.widget.clone().upcast::<gtk4::Widget>()) == active)
-            .unwrap_or(0);
-        let next = ((current as i32 + delta).rem_euclid(len as i32)) as usize;
-        let vte = this.borrow().tabs[next].vte.clone();
-        Self::select_tab(this, &vte);
-    }
-
-    fn select_tab_by_index(this: &WindowRef, index: i32) {
-        let vte = {
-            let b = this.borrow();
-            if index < 0 {
-                return;
+    fn resize_all(&mut self, w: u32, h: u32) {
+        let (cols, rows) = self.grid_size_for(w, h);
+        if cols != self.term.cols || rows != self.term.rows {
+            self.term.resize(cols, rows);
+            if let Some(pty) = &self.pty {
+                pty.resize(cols, rows);
             }
-            b.tabs.get(index as usize).map(|t| t.vte.clone())
-        };
-        if let Some(vte) = vte {
-            Self::select_tab(this, &vte);
+            // Manual memory: the frame buffer is one Vec, re-allocated
+            // (freed) only on real resizes.
+            let px_w = cols as usize * self.face.metrics.cell_width.max(1) as usize;
+            let px_h = rows as usize * self.face.metrics.line_height.max(1) as usize;
+            self.frame = vec![0u32; px_w * px_h];
+        }
+        if let Some(surface) = &mut self.surface {
+            let _ = surface.resize(
+                std::num::NonZeroU32::new(w.max(1)).unwrap(),
+                std::num::NonZeroU32::new(h.max(1)).unwrap(),
+            );
+        }
+        self.scroll_offset = 0;
+        if let Some(win) = &self.window {
+            win.request_redraw();
         }
     }
 
-    fn close_tab(this: &WindowRef, vte: &VteTerminal) {
-        let index = {
-            let b = this.borrow();
-            Self::find_index(&b, vte)
-        };
-        let Some(index) = index else { return };
-
-        let was_active = {
-            let b = this.borrow();
-            b.stack
-                .visible_child()
-                .map(|w| w == b.tabs[index].widget.clone().upcast::<gtk4::Widget>())
-                .unwrap_or(false)
-        };
-
-        {
-            let mut b = this.borrow_mut();
-            let tab = b.tabs.remove(index);
-            b.tabs_box.remove(&tab.item.widget);
-            b.stack.remove(&tab.widget);
+    fn redraw(&mut self) {
+        let Some(win) = &self.window else { return };
+        let size = win.inner_size();
+        let (w, h) = (size.width.max(1) as usize, size.height.max(1) as usize);
+        if self.frame.len() != w * h {
+            self.frame = vec![0u32; w * h];
         }
-
-        if this.borrow().tabs.is_empty() {
-            this.borrow().window.close();
-            return;
-        }
-
-        Self::refresh_tab_titles(this);
-
-        if was_active {
-            let next_index = index.min(this.borrow().tabs.len() - 1);
-            Self::select_tab_by_index(this, next_index as i32);
-        }
-    }
-
-    fn refresh_tab_titles(this: &WindowRef) {
-        let b = this.borrow();
-        let active = b.stack.visible_child();
-        for (i, tab) in b.tabs.iter().enumerate() {
-            let dyn_title = dynamic_title(&tab.vte);
-            let display = title::tab_display_title(i + 1, Some(&dyn_title));
-            tab.item.set_title(&display);
-            if active == Some(tab.widget.clone().upcast::<gtk4::Widget>()) {
-                b.window
-                    .set_title(Some(&title::window_title(Some(&dyn_title))));
-            }
-        }
-    }
-
-    fn apply_blur_state(&self, s: &Settings) {
-        self.static_bg_container
-            .set_visible(s.blur_mode == BlurMode::Static);
-        match s.blur_mode {
-            BlurMode::Static => {
-                self.blur_badge.set_text("◆ Blur: Static");
-                self.blur_badge.set_visible(true);
-            }
-            BlurMode::Smoky => {
-                self.blur_badge.set_text("◆ Blur: Smoky");
-                self.blur_badge.set_visible(true);
-            }
-            BlurMode::Off => self.blur_badge.set_visible(false),
-        }
-    }
-
-    /// Apply the configured font (family + size) to every open terminal.
-    /// Called on startup and on every settings change, so Ctrl+Shift+=
-    /// and Ctrl+Shift+- resize the terminals immediately.
-    fn apply_fonts(&self, s: &Settings) {
-        for tab in &self.tabs {
-            Self::apply_font_to(&tab.vte, s);
-        }
-    }
-
-    /// Apply the configured font to a single terminal (used by
-    /// `apply_fonts` and when a new tab is created).
-    fn apply_font_to(vte: &VteTerminal, s: &Settings) {
-        let desc =
-            gtk4::pango::FontDescription::from_string(&format!("{} {}", s.font, s.font_size));
-        vte.set_font(Some(&desc));
-    }
-
-    /// Apply the theme colors DIRECTLY to every VTE terminal (not just
-    /// via CSS). VTE paints its own background, so in glass modes the
-    /// terminal area would stay black no matter what the CSS said -
-    /// this was the reported "arka fon değişmiyor" bug. With
-    /// set_colors the theme background, foreground, cursor and the full
-    /// 16-color ANSI palette of the upstream theme file are applied,
-    /// and switching themes (Ctrl+Shift+T / `tuxixi theme set`) is
-    /// visible immediately in every mode.
-    fn apply_colors(&self, s: &Settings) {
-        let colors = theme::terminal_colors(&s.theme, s.transparent, s.blur_mode.as_str());
-        for tab in &self.tabs {
-            Self::apply_vte_colors(&tab.vte, &colors);
-        }
-    }
-
-    /// Convert the resolved [`theme::TerminalColors`] to gdk values and
-    /// paint one VTE terminal: foreground, background, cursor and the
-    /// full 16-color ANSI palette.
-    fn apply_vte_colors(vte: &VteTerminal, colors: &theme::TerminalColors) {
-        let to_gdk = |c: theme::Rgba| {
-            gdk::RGBA::new(c.r as f32, c.g as f32, c.b as f32, c.a as f32)
-        };
-        let gdk_bg = to_gdk(colors.background);
-        let gdk_fg = to_gdk(colors.foreground);
-        let gdk_cursor = to_gdk(colors.cursor);
-        let palette: Vec<gdk::RGBA> = colors.palette.iter().map(|c| to_gdk(*c)).collect();
-        let palette_refs: Vec<&gdk::RGBA> = palette.iter().collect();
-        vte.set_colors(Some(&gdk_fg), Some(&gdk_bg), &palette_refs);
-        vte.set_color_cursor(Some(&gdk_cursor));
-    }
-}
-
-/// Port of `TuxixiTerminal.get_dynamic_title` applied to a live VTE.
-fn dynamic_title(vte: &VteTerminal) -> String {
-    let raw = vte.window_title().unwrap_or_default();
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
-    let cwd = vte
-        .current_directory_uri()
-        .and_then(|uri| glib::filename_from_uri(&uri).ok().map(|(p, _)| p.to_string_lossy().into_owned()));
-    title::dynamic_tab_title(&raw, cwd.as_deref(), &home)
-}
-
-/// Port of `_setup_static_blur_layer`.
-fn setup_static_blur_layer(container: &gtk4::Box) {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
-    let base = std::path::PathBuf::from("/");
-    let wp = wallpaper::detect_wallpaper_path(&home, &base, wallpaper::real_gsettings_runner);
-    if let Some(wp) = wp {
-        let pic = Picture::for_filename(&wp);
-        pic.set_content_fit(gtk4::ContentFit::Cover);
-        pic.set_can_shrink(true);
-        pic.set_hexpand(true);
-        pic.set_vexpand(true);
-        pic.add_css_class("tuxixi-static-blur-pic");
-        container.append(&pic);
-    } else {
-        container.add_css_class("tuxixi-static-blur-fallback");
-    }
-}
-
-// ---------------------------------------------------------------------
-// TabItem (port of TuxixiTabItem)
-// ---------------------------------------------------------------------
-
-struct TabItem {
-    widget: gtk4::Box,
-    label: Label,
-    on_select: Rc<RefCell<Option<Box<dyn Fn()>>>>,
-    on_close: Rc<RefCell<Option<Box<dyn Fn()>>>>,
-}
-
-impl TabItem {
-    fn new(title: &str) -> Self {
-        let widget = gtk4::Box::new(Orientation::Horizontal, 2);
-        widget.add_css_class("tuxixi-tab");
-
-        let label = Label::new(Some(title));
-        label.add_css_class("tuxixi-tab-title");
-        label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
-        label.set_max_width_chars(20);
-        widget.append(&label);
-
-        let close_btn = Button::with_label("×");
-        close_btn.add_css_class("tuxixi-tab-close");
-        close_btn.set_can_focus(false);
-        close_btn.set_opacity(0.0);
-        widget.append(&close_btn);
-
-        let on_select: Rc<RefCell<Option<Box<dyn Fn()>>>> = Rc::new(RefCell::new(None));
-        let on_close: Rc<RefCell<Option<Box<dyn Fn()>>>> = Rc::new(RefCell::new(None));
-
-        // Hover reveals the close button.
-        let motion = EventControllerMotion::new();
-        {
-            let close_btn_enter = close_btn.clone();
-            motion.connect_enter(move |_, _, _| close_btn_enter.set_opacity(1.0));
-            let close_btn_leave = close_btn.clone();
-            motion.connect_leave(move |_| close_btn_leave.set_opacity(0.0));
-        }
-        widget.add_controller(motion);
-
-        // Middle click closes (port of _on_pressed button==2); plain
-        // clicks are handled by a click gesture that ignores the close
-        // button area.
-        let click = GestureClick::new();
-        click.set_button(2);
-        {
-            let on_close = on_close.clone();
-            click.connect_pressed(move |gesture, _n, _x, _y| {
-                gesture.set_state(gtk4::EventSequenceState::Claimed);
-                fire(&on_close);
-            });
-        }
-        widget.add_controller(click);
-        {
-            let on_select = on_select.clone();
-            let close_btn = close_btn.clone();
-            let widget_for_click = widget.clone();
-            let gesture = GestureClick::new();
-            gesture.set_button(1);
-            gesture.connect_pressed(move |gesture, _n, x, y| {
-                // Presses on the close button must reach the button itself:
-                // claiming the sequence here would cancel its click. So only
-                // claim and select when the press is elsewhere on the tab.
-                let inside_close = close_btn
-                    .compute_bounds(widget_for_click.upcast_ref::<gtk4::Widget>())
-                    .map(|rect| {
-                        x >= rect.x() as f64
-                            && y >= rect.y() as f64
-                            && x <= (rect.x() + rect.width()) as f64
-                            && y <= (rect.y() + rect.height()) as f64
-                    })
-                    .unwrap_or(false);
-                if inside_close {
-                    return;
+        paint(
+            &mut self.frame,
+            w,
+            h,
+            &self.term,
+            self.scroll_offset,
+            &self.palette,
+            &mut self.face,
+            self.selection.as_ref(),
+        );
+        if let Some(surface) = &mut self.surface {
+            match surface.buffer_mut() {
+                Ok(mut buffer) => {
+                    // Copy only the overlapping prefix: the softbuffer
+                    // buffer may be padded relative to our frame.
+                    let n = buffer.len().min(self.frame.len());
+                    buffer[..n].copy_from_slice(&self.frame[..n]);
+                    let _ = buffer.present();
                 }
-                gesture.set_state(gtk4::EventSequenceState::Claimed);
-                fire(&on_select);
-            });
-            widget.add_controller(gesture);
-        }
-
-        let on_close_btn = on_close.clone();
-        close_btn.connect_clicked(move |_| fire(&on_close_btn));
-
-        Self {
-            widget,
-            label,
-            on_select,
-            on_close,
+                Err(e) => eprintln!("frame buffer error: {e:?}"),
+            }
         }
     }
 
-    fn set_title(&self, title: &str) {
-        self.label.set_text(title);
-        self.widget.set_tooltip_text(Some(title));
+    fn cell_at(&self, x: i32, y: i32) -> (u16, u16) {
+        let cw = self.face.metrics.cell_width.max(1) as i32;
+        let lh = self.face.metrics.line_height.max(1) as i32;
+        let col = (x.max(0) / cw) as u16;
+        let row = (y.max(0) / lh) as u16;
+        (col.min(self.term.cols - 1), row.min(self.term.rows - 1))
     }
 
-    fn set_active(&self, active: bool) {
-        if active {
-            self.widget.add_css_class("active");
-        } else {
-            self.widget.remove_css_class("active");
+    fn scroll_by(&mut self, delta: isize) {
+        if self.term.on_alt_screen() {
+            return; // full-screen apps handle their own scrolling
+        }
+        let max = self.term.scrollback_len();
+        let next = (self.scroll_offset as isize + delta).clamp(0, max as isize);
+        if next as usize != self.scroll_offset {
+            self.scroll_offset = next as usize;
+            if let Some(win) = &self.window {
+                win.request_redraw();
+            }
         }
     }
 
-    fn set_on_select(&self, f: impl Fn() + 'static) {
-        *self.on_select.borrow_mut() = Some(Box::new(f));
+    fn key_to_input_key(&self, key: &Key) -> Option<InputKey> {
+        Some(match key {
+            Key::Character(s) => InputKey::Char(s.chars().next()?),
+            Key::Named(n) => match n {
+                NamedKey::Enter => InputKey::Enter,
+                NamedKey::Backspace => InputKey::Backspace,
+                NamedKey::Tab => InputKey::Tab,
+                NamedKey::Escape => InputKey::Escape,
+                NamedKey::ArrowUp => InputKey::Up,
+                NamedKey::ArrowDown => InputKey::Down,
+                NamedKey::ArrowLeft => InputKey::Left,
+                NamedKey::ArrowRight => InputKey::Right,
+                NamedKey::Home => InputKey::Home,
+                NamedKey::End => InputKey::End,
+                NamedKey::PageUp => InputKey::PageUp,
+                NamedKey::PageDown => InputKey::PageDown,
+                NamedKey::Insert => InputKey::Insert,
+                NamedKey::Delete => InputKey::Delete,
+                NamedKey::F1 => InputKey::F(1),
+                NamedKey::F2 => InputKey::F(2),
+                NamedKey::F3 => InputKey::F(3),
+                NamedKey::F4 => InputKey::F(4),
+                NamedKey::F5 => InputKey::F(5),
+                NamedKey::F6 => InputKey::F(6),
+                NamedKey::F7 => InputKey::F(7),
+                NamedKey::F8 => InputKey::F(8),
+                NamedKey::F9 => InputKey::F(9),
+                NamedKey::F10 => InputKey::F(10),
+                NamedKey::F11 => InputKey::F(11),
+                NamedKey::F12 => InputKey::F(12),
+                NamedKey::Space => InputKey::Char(' '),
+                _ => return None,
+            },
+            _ => return None,
+        })
     }
 
-    fn set_on_close(&self, f: impl Fn() + 'static) {
-        *self.on_close.borrow_mut() = Some(Box::new(f));
+    fn modifiers(&self) -> Modifiers {
+        Modifiers {
+            ctrl: self.mods.control_key(),
+            alt: self.mods.alt_key(),
+            shift: self.mods.shift_key(),
+            logo: self.mods.super_key(),
+        }
     }
-}
 
-fn fire(cb: &Rc<RefCell<Option<Box<dyn Fn()>>>>) {
-    if let Some(f) = cb.borrow().as_ref() {
-        f();
-    }
-}
-
-// ---------------------------------------------------------------------
-// Terminal session + shortcuts (port of TuxixiTerminal)
-// ---------------------------------------------------------------------
-
-fn setup_key_controller(vte: &VteTerminal, this: WindowRef) {
-    let ctrl = EventControllerKey::new();
-    ctrl.set_propagation_phase(gtk4::PropagationPhase::Capture);
-
-    let vte_for_keys = vte.clone();
-    let settings = this.borrow().settings.clone();
-    ctrl.connect_key_pressed(move |_ctrl, keyval, _keycode, state| {
-        use gdk::Key;
-        let ctrl_mod = state.contains(gdk::ModifierType::CONTROL_MASK);
-        let shift = state.contains(gdk::ModifierType::SHIFT_MASK);
-        let alt = state.contains(gdk::ModifierType::ALT_MASK);
-
-        // Alt+1..9 (also keypad) -> select tab.
-        if alt && !ctrl_mod && !shift {
-            let idx = match keyval {
-                Key::_1 | Key::KP_1 => Some(0),
-                Key::_2 | Key::KP_2 => Some(1),
-                Key::_3 | Key::KP_3 => Some(2),
-                Key::_4 | Key::KP_4 => Some(3),
-                Key::_5 | Key::KP_5 => Some(4),
-                Key::_6 | Key::KP_6 => Some(5),
-                Key::_7 | Key::KP_7 => Some(6),
-                Key::_8 | Key::KP_8 => Some(7),
-                Key::_9 | Key::KP_9 => Some(8),
-                _ => None,
-            };
-            if let Some(idx) = idx {
-                TuxixiWindow::select_tab_by_index(&this, idx as i32);
-                return glib::Propagation::Stop;
-            }
+    /// GUI shortcuts that run BEFORE bytes reach the child.
+    /// Returns true when the key was consumed.
+    fn handle_shortcut(&mut self, key: &InputKey) -> bool {
+        if !(self.mods.control_key() && self.mods.shift_key()) {
+            return false;
         }
-
-        if !ctrl_mod {
-            return glib::Propagation::Proceed;
-        }
-
-        // Ctrl+Tab / Ctrl+Shift+Tab -> switch tab.
-        if matches!(keyval, Key::Tab | Key::ISO_Left_Tab | Key::KP_Tab) {
-            let delta = if shift { -1 } else { 1 };
-            TuxixiWindow::switch_tab_relative(&this, delta);
-            return glib::Propagation::Stop;
-        }
-        // Ctrl+PageUp/PageDown -> switch tab (no Shift, like Python).
-        if !shift {
-            if keyval == Key::Page_Down {
-                TuxixiWindow::switch_tab_relative(&this, 1);
-                return glib::Propagation::Stop;
-            }
-            if keyval == Key::Page_Up {
-                TuxixiWindow::switch_tab_relative(&this, -1);
-                return glib::Propagation::Stop;
-            }
-        }
-
-        if !shift {
-            return glib::Propagation::Proceed;
-        }
-
-        match keyval {
-            Key::C | Key::c => {
-                vte_for_keys.copy_clipboard_format(vte4::Format::Text);
-                glib::Propagation::Stop
-            }
-            Key::V | Key::v => {
-                vte_for_keys.paste_clipboard();
-                glib::Propagation::Stop
-            }
-            Key::plus | Key::equal | Key::KP_Add => {
-                settings.borrow_mut().change_font_size(1);
-                glib::Propagation::Stop
-            }
-            Key::minus | Key::underscore | Key::KP_Subtract => {
-                settings.borrow_mut().change_font_size(-1);
-                glib::Propagation::Stop
-            }
-            Key::T | Key::t => {
-                settings.borrow_mut().cycle_theme();
-                glib::Propagation::Stop
-            }
-            Key::O | Key::o => {
-                settings.borrow_mut().toggle_transparency();
-                glib::Propagation::Stop
-            }
-            Key::B | Key::b => {
-                settings.borrow_mut().cycle_blur_mode();
-                glib::Propagation::Stop
-            }
-            Key::Return | Key::KP_Enter => {
-                TuxixiWindow::add_tab(&this);
-                glib::Propagation::Stop
-            }
-            Key::W | Key::w => {
-                let active = this.borrow().stack.visible_child();
-                let vte_to_close = this
-                    .borrow()
-                    .tabs
-                    .iter()
-                    .find(|t| Some(t.widget.clone().upcast::<gtk4::Widget>()) == active)
-                    .map(|t| t.vte.clone());
-                if let Some(v) = vte_to_close {
-                    TuxixiWindow::close_tab(&this, &v);
-                }
-                glib::Propagation::Stop
-            }
-            Key::N | Key::n => {
-                // New window: activate the application again, which builds
-                // another top level window (same as running `tuxixi` twice).
-                if let Some(app) = this.borrow().window.application() {
-                    if let Some(app) = app.downcast::<Application>().ok() {
-                        app.activate();
+        match key {
+            InputKey::Char('c') => {
+                if let Some(sel) = &self.selection {
+                    let text = sel.text(&self.term);
+                    if let Ok(mut clip) = arboard::Clipboard::new() {
+                        let _ = clip.set_text(text);
                     }
                 }
-                glib::Propagation::Stop
+                true
             }
-            _ => glib::Propagation::Proceed,
-        }
-    });
-    vte.add_controller(ctrl);
-}
-
-/// Port of `_start_session`: feed the welcome banner, then spawn the
-/// user's shell with the TUXIXI environment.
-fn setup_session(vte: &VteTerminal) {
-    let shell_path = shell::default_shell(passwd_shell().as_deref(), Some(&shell_env()));
-    let argv_full = shell::shell_argv(&shell_path);
-    let argv: Vec<&str> = argv_full.iter().map(|s| s.as_str()).collect();
-
-    // TUXIXI environment + inherited environment, with the TUXIXI bin
-    // dir merged into PATH (dedup, appended at the end) so the `ll` and
-    // `cls` wrappers installed next to the binary are always reachable
-    // inside the session.
-    let bin_dir = bin_dir();
-    let bin_dir_str = bin_dir.to_string_lossy().into_owned();
-    let mut pairs: Vec<(String, String)> = shell::session_env(&bin_dir_str);
-    for (k, v) in std::env::vars() {
-        if k == "PATH" {
-            pairs.push((k, shell::merge_path(&v, &bin_dir_str)));
-        } else {
-            pairs.push((k, v));
-        }
-    }
-    let envv: Vec<String> = pairs.iter().map(|(k, v)| format!("{k}={v}")).collect();
-    let envv: Vec<&str> = envv.iter().map(|s| s.as_str()).collect();
-
-    let cwd = std::env::var("HOME").unwrap_or_else(|_| "/".into());
-
-    // Welcome banner (port of the tuxixi --welcome feed). Uses the
-    // running binary itself, so it works even when `tuxixi` is not on
-    // the session PATH yet.
-    if let Ok(exe) = std::env::current_exe() {
-        if let Ok(out) = std::process::Command::new(exe).arg("--welcome").output() {
-            if out.status.success() && !out.stdout.is_empty() {
-                let text = String::from_utf8_lossy(&out.stdout).replace('\n', "\r\n");
-                vte.feed(text.as_bytes());
+            InputKey::Char('v') => {
+                if let Ok(mut clip) = arboard::Clipboard::new() {
+                    if let Ok(text) = clip.get_text() {
+                        let bytes = input::encode_paste(&text, self.term.bracketed_paste());
+                        if let Some(pty) = &self.pty {
+                            pty.write(&bytes);
+                        }
+                    }
+                }
+                true
             }
+            InputKey::Char('t') => {
+                if self.settings_mgr.cycle_theme() {
+                    self.settings = self.settings_mgr.get().clone();
+                    self.palette = Self::palette_from_settings(&self.settings);
+                    if let Some(win) = &self.window {
+                        win.request_redraw();
+                    }
+                }
+                true
+            }
+            _ => false,
         }
     }
 
-    vte.spawn_async(
-        vte4::PtyFlags::DEFAULT,
-        Some(&cwd),
-        &argv,
-        &envv,
-        glib::SpawnFlags::DEFAULT,
-        || {},
-        -1,
-        None::<&gio::Cancellable>,
-        move |result| {
-            if let Err(e) = result {
-                eprintln!("Error: Shell did not work. - {e}");
+    fn change_font_size(&mut self, delta: i32) {
+        let current = self.settings.font_size as i32;
+        let next = (current + delta).clamp(MIN_PX, MAX_PX);
+        if next == current {
+            return;
+        }
+        let target = next as u32;
+        while self.settings_mgr.get().font_size != target {
+            let step = if target > self.settings_mgr.get().font_size {
+                1
+            } else {
+                -1
+            };
+            if !self.settings_mgr.change_font_size(step) {
+                break;
             }
-        },
-    );
+        }
+        self.settings = self.settings_mgr.get().clone();
+        self.reload_face();
+        if let Some(win) = &self.window {
+            let size = win.inner_size();
+            self.resize_all(size.width, size.height);
+        }
+    }
+
+    /// Build the session environment: inherited env with the TUXIXI
+    /// bin dir merged into PATH, plus the TUXIXI_* markers.
+    fn session_environment() -> Vec<(String, String)> {
+        let bin_dir = bin_dir();
+        let bin_dir_str = bin_dir.to_string_lossy().into_owned();
+        let mut pairs: Vec<(String, String)> = shell::session_env(&bin_dir_str);
+        if let Some(path) = std::env::var_os("PATH") {
+            let merged = shell::merge_path(&path.to_string_lossy(), &bin_dir_str);
+            pairs.retain(|(k, _)| k != "PATH");
+            pairs.push(("PATH".to_string(), merged));
+        }
+        pairs
+    }
+
+    /// Feed the welcome banner (same `tuxixi --welcome` output as the
+    /// GTK build, including the red `(rust)` tag).
+    fn feed_welcome(&mut self) {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Ok(out) = std::process::Command::new(exe).arg("--welcome").output() {
+                if out.status.success() && !out.stdout.is_empty() {
+                    let text = String::from_utf8_lossy(&out.stdout).replace('\n', "\r\n");
+                    self.term.feed(text.as_bytes());
+                }
+            }
+        }
+    }
 }
 
+impl ApplicationHandler<PtyEvent> for App {
+    fn resumed(&mut self, el: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+        let attrs = Window::default_attributes()
+            .with_title("TUXIXI Terminal")
+            .with_inner_size(PhysicalSize::new(INITIAL_SIZE.0, INITIAL_SIZE.1));
+        let window = Arc::new(el.create_window(attrs).expect("create window"));
+
+        let context = Context::new(window.clone()).expect("softbuffer context");
+        let surface = Surface::new(&context, window.clone()).expect("softbuffer surface");
+        self.context = Some(context);
+        self.surface = Some(surface);
+        self.window = Some(window.clone());
+
+        let size = window.inner_size();
+        let (cols, rows) = self.grid_size_for(size.width.max(1), size.height.max(1));
+        self.term.resize(cols, rows);
+
+        // Welcome banner BEFORE the shell output arrives.
+        self.feed_welcome();
+
+        // Spawn the user's shell on a fresh PTY.
+        let shell_path = shell::default_shell(passwd_shell().as_deref(), shell_env().as_deref());
+        let argv = shell::shell_argv(&shell_path);
+        let cwd = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+        match Pty::spawn(&argv, &cwd, cols, rows, &Self::session_environment()) {
+            Ok(pty) => {
+                let proxy = self.proxy.clone();
+                pty.start_reader(move |ev| {
+                    let _ = proxy.send_event(ev);
+                });
+                pty.resize(cols, rows);
+                self.pty = Some(pty);
+            }
+            Err(e) => eprintln!("failed to spawn shell: {e}"),
+        }
+
+        self.resize_all(size.width.max(1), size.height.max(1));
+        window.request_redraw();
+    }
+
+    fn user_event(&mut self, el: &ActiveEventLoop, event: PtyEvent) {
+        match event {
+            PtyEvent::Output(bytes) => {
+                self.term.feed(&bytes);
+                self.term.maintain_memory();
+                // Reflect OSC title changes in the window title.
+                if let Some(win) = &self.window {
+                    if !self.term.title.is_empty() {
+                        let t = format!("TUXIXI Terminal — {}", self.term.title);
+                        if win.title() != t {
+                            win.set_title(&t);
+                        }
+                    }
+                }
+                if let Some(win) = &self.window {
+                    win.request_redraw();
+                }
+            }
+            PtyEvent::Exited => {
+                self.exiting_cleanup();
+                el.exit();
+            }
+        }
+    }
+
+    fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        match event {
+            WindowEvent::CloseRequested => {
+                self.exiting_cleanup();
+                el.exit();
+            }
+            WindowEvent::Resized(size) => {
+                self.resize_all(size.width.max(1), size.height.max(1));
+            }
+            WindowEvent::RedrawRequested => {
+                self.redraw();
+            }
+            WindowEvent::ModifiersChanged(m) => {
+                self.mods = m.state();
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if event.state != ElementState::Pressed {
+                    return;
+                }
+                let ctrl = self.mods.control_key();
+                let shift = self.mods.shift_key();
+
+                // Font size keys first (physical, layout-independent).
+                if ctrl && !shift {
+                    match event.physical_key {
+                        PhysicalKey::Code(KeyCode::Equal | KeyCode::NumpadAdd) => {
+                            self.change_font_size(1);
+                            return;
+                        }
+                        PhysicalKey::Code(KeyCode::Minus | KeyCode::NumpadSubtract) => {
+                            self.change_font_size(-1);
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+
+                let Some(key) = self.key_to_input_key(&event.logical_key) else {
+                    return;
+                };
+
+                // GUI shortcuts (Ctrl+Shift+C/V/T) run before the child.
+                if ctrl && shift && self.handle_shortcut(&key) {
+                    return;
+                }
+
+                // Shift+PageUp / Shift+PageDown scroll the buffer.
+                if shift && !ctrl {
+                    match key {
+                        InputKey::PageUp => {
+                            self.scroll_by(-(self.term.rows as isize));
+                            return;
+                        }
+                        InputKey::PageDown => {
+                            self.scroll_by(self.term.rows as isize);
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Any other key input snaps back to the live screen.
+                if self.scroll_offset != 0 {
+                    self.scroll_offset = 0;
+                }
+                if let Some(bytes) = input::encode(key, self.modifiers(), self.term.app_cursor())
+                {
+                    if let Some(pty) = &self.pty {
+                        pty.write(&bytes);
+                    }
+                }
+                if let Some(win) = &self.window {
+                    win.request_redraw();
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.mouse_pos = (position.x as i32, position.y as i32);
+                if let Some(anchor) = self.select_anchor {
+                    let cell = self.cell_at(self.mouse_pos.0, self.mouse_pos.1);
+                    self.selection = Some(Selection {
+                        start: anchor,
+                        end: cell,
+                    });
+                    if let Some(win) = &self.window {
+                        win.request_redraw();
+                    }
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                if button != winit::event::MouseButton::Left {
+                    return;
+                }
+                match state {
+                    ElementState::Pressed => {
+                        let cell = self.cell_at(self.mouse_pos.0, self.mouse_pos.1);
+                        self.select_anchor = Some(cell);
+                        self.selection = None;
+                    }
+                    ElementState::Released => {
+                        if let Some(anchor) = self.select_anchor {
+                            let cell = self.cell_at(self.mouse_pos.0, self.mouse_pos.1);
+                            if anchor != cell {
+                                self.selection = Some(Selection {
+                                    start: anchor,
+                                    end: cell,
+                                });
+                            }
+                            self.select_anchor = None;
+                            if let Some(win) = &self.window {
+                                win.request_redraw();
+                            }
+                        }
+                    }
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let lines = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => (y * WHEEL_STEP).round() as isize,
+                    MouseScrollDelta::PixelDelta(p) => {
+                        let lh = self.face.metrics.line_height.max(1) as f64;
+                        (p.y / lh).round() as isize
+                    }
+                };
+                if lines != 0 {
+                    self.scroll_by(-lines);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        el.set_control_flow(ControlFlow::Wait);
+    }
+}
+
+impl App {
+    /// Explicit teardown: close the PTY master, tell the child to go.
+    fn exiting_cleanup(&mut self) {
+        if let Some(pty) = &mut self.pty {
+            pty.shutdown();
+        }
+        kill_child();
+        // Release the big buffers explicitly instead of waiting for the
+        // process to die with them.
+        self.frame.clear();
+        self.frame.shrink_to_fit();
+        self.face.clear_cache();
+        self.term.maintain_memory();
+    }
+}
+
+fn shell_env() -> Option<String> {
+    std::env::var("SHELL").ok()
+}
+
+/// Minimal /etc/passwd lookup for the current uid (port of
+/// pwd.getpwuid(os.getuid()).pw_shell, same as the GTK build).
 fn passwd_shell() -> Option<String> {
-    // Minimal /etc/passwd lookup for the current uid (port of
-    // pwd.getpwuid(os.getuid()).pw_shell).
     let uid = unsafe { libc::getuid() };
     let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
     for line in passwd.lines() {
@@ -758,60 +550,54 @@ fn passwd_shell() -> Option<String> {
     None
 }
 
-fn shell_env() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
-}
-
+/// The directory that contains the running binary (e.g. ~/.local/bin).
 fn bin_dir() -> std::path::PathBuf {
-    // The directory that contains the running binary (e.g.
-    // ~/.local/bin). The old code appended a literal "bin" component,
-    // producing a nonexistent ~/.local/bin/bin path.
     std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
         .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
-// ---------------------------------------------------------------------
-// Application (port of TuxixiApplication)
-// ---------------------------------------------------------------------
-
-/// Run the GUI application. Blocks until the last window is closed.
+/// Entry point of the winit GUI (called from `main` with no args).
 pub fn run() {
-    let app = Application::builder().application_id(APP_ID).build();
+    let settings_mgr = SettingsManager::load_default_location();
+    let settings = settings_mgr.get().clone();
 
-    let settings: Rc<RefCell<SettingsManager>> =
-        Rc::new(RefCell::new(SettingsManager::load_default_location()));
+    let term = Terminal::new(80, 24);
+    let palette = App::palette_from_settings(&settings);
+    let face = match load_default_face(&settings.font, settings.font_size as f32) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("{e}");
+            return;
+        }
+    };
 
-    app.connect_activate(move |app| {
-        apply_global_css(&settings);
-        let win = TuxixiWindow::build(app, settings.clone());
-        win.borrow().window.present();
-    });
+    let event_loop = EventLoop::with_user_event()
+        .build()
+        .expect("build winit event loop");
+    let proxy = event_loop.create_proxy();
 
-    app.run();
-}
+    let mut app = App {
+        settings,
+        settings_mgr,
+        term,
+        pty: None,
+        face,
+        palette,
+        scroll_offset: 0,
+        mods: ModifiersState::empty(),
+        window: None,
+        context: None,
+        surface: None,
+        frame: Vec::new(),
+        selection: None,
+        select_anchor: None,
+        mouse_pos: (0, 0),
+        proxy,
+    };
 
-fn apply_global_css(settings: &Rc<RefCell<SettingsManager>>) {
-    let provider = CssProvider::new();
-    let s = settings.borrow().get().clone();
-    let css = crate::css::build_css(&s.theme, s.transparent, s.blur_mode);
-    provider.load_from_string(&css);
-    if let Some(display) = gdk::Display::default() {
-        gtk4::style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
+    if let Err(e) = event_loop.run_app(&mut app) {
+        eprintln!("event loop error: {e}");
     }
-
-    // Live theme switching: reload the SAME provider whenever a setting
-    // changes. Reloading invalidates the styles, so Ctrl+Shift+T (theme),
-    // Ctrl+Shift+O (glass) and Ctrl+Shift+B (blur) take effect
-    // immediately without restarting. Without this listener the CSS was
-    // built exactly once at startup and theme changes were invisible.
-    settings.borrow_mut().on_change(std::rc::Rc::new(move |s| {
-        let css = crate::css::build_css(&s.theme, s.transparent, s.blur_mode);
-        provider.load_from_string(&css);
-    }));
 }

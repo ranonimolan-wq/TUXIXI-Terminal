@@ -263,12 +263,12 @@ pub fn parse_alacritty_toml(content: &str) -> Result<Theme, String> {
             ("colors.primary", "foreground") => foreground = value,
             ("colors.cursor", "cursor") => cursor = value,
             ("colors.normal", k) => {
-                if let Some(i) = ansi_index(&k) {
+                if let Some(i) = ansi_index(k) {
                     normal[i] = value;
                 }
             }
             ("colors.bright", k) => {
-                if let Some(i) = ansi_index(&k) {
+                if let Some(i) = ansi_index(k) {
                     bright[i] = value;
                 }
             }
@@ -380,12 +380,12 @@ pub fn parse_alacritty_yaml(content: &str) -> Result<Theme, String> {
             ("primary", "foreground") => foreground = value,
             ("cursor", "cursor") => cursor = value,
             ("normal", k) => {
-                if let Some(i) = ansi_index(&k) {
+                if let Some(i) = ansi_index(k) {
                     normal[i] = value;
                 }
             }
             ("bright", k) => {
-                if let Some(i) = ansi_index(&k) {
+                if let Some(i) = ansi_index(k) {
                     bright[i] = value;
                 }
             }

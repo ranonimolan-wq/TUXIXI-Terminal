@@ -38,6 +38,7 @@ impl BlurMode {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "off" => Some(BlurMode::Off),
@@ -137,10 +138,9 @@ impl Settings {
         }
 
         // Legacy compatibility: {"blur": true} meant static blur.
-        if !matches!(obj.get("blur_mode"), Some(serde_json::Value::String(_)))
-            || s.blur_mode == BlurMode::Off
-        {
-            if obj.get("blur").and_then(|b| b.as_bool()) == Some(true) {
+        if (!matches!(obj.get("blur_mode"), Some(serde_json::Value::String(_)))
+            || s.blur_mode == BlurMode::Off)
+            && obj.get("blur").and_then(|b| b.as_bool()) == Some(true) {
                 // Python only applies the legacy key when blur_mode itself
                 // was invalid; keep the same precedence.
                 let mode_invalid = match obj.get("blur_mode") {
@@ -151,7 +151,6 @@ impl Settings {
                     s.blur_mode = BlurMode::Static;
                 }
             }
-        }
 
         s
     }
@@ -336,8 +335,7 @@ fn tempfile_in(dir: &Path) -> std::io::Result<TempGuard> {
             Err(e) => return Err(e),
         }
     }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Other,
+    Err(std::io::Error::other(
         "could not create temp file",
     ))
 }

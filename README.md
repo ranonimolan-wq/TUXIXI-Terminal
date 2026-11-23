@@ -4,7 +4,7 @@
 
 A small terminal emulator for Linux, written in Rust.
 
-![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange) ![GTK4 + VTE](https://img.shields.io/badge/GTK4-VTE%203.91-blue) ![Platform](https://img.shields.io/badge/Platform-Linux-green) ![License](https://img.shields.io/badge/License-GPL--3.0-yellow)
+![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange) ![winit%20+%20softbuffer](https://img.shields.io/badge/GUI-winit%20(pure%20Rust)-blue) ![Platform](https://img.shields.io/badge/Platform-Linux-green) ![License](https://img.shields.io/badge/License-GPL--3.0-yellow)
 
 </div>
 
@@ -13,9 +13,12 @@ of Python. The old Python code is gone; everything now lives in a single Cargo
 project at the repository root. Releases are built automatically by GitHub
 Actions.
 
-The GUI is GTK4 + VTE, so you get a real terminal — your own shell (Bash, Zsh,
-Fish), scrollback, copy/paste, TrueColor — wrapped in a small, customizable
-window with tabs, 32 themes and optional transparency (glass/blur).
+The GUI is pure Rust — winit for the window, a CPU framebuffer renderer,
+`ab_glyph` for fonts and our own VT parser + PTY — the same architecture
+Alacritty uses. You get a real terminal — your own shell (Bash, Zsh, Fish),
+capped 10 000-row scrollback, copy/paste, TrueColor, 32 themes — with
+single-digit-MB idle memory instead of the ~240 MB the old GTK stack took.
+(No tabs any more: one window per terminal, like Alacritty.)
 
 ## Install
 
@@ -26,9 +29,9 @@ the binary and sets it up in `~/.local` for you:
 curl -fsSL https://raw.githubusercontent.com/ranonimolan-wq/TUXIXI-Terminal/main/install.sh | bash
 ```
 
-No root required. The binary needs GTK4 and VTE 3.91 at runtime
-(`libgtk-4-1` and `libvte-2.91-gtk4-1` on Debian/Ubuntu, `vte4` on Arch,
-`vte291-gtk4` on Fedora — most desktop systems already have them).
+No root required and no GUI system libraries: the binary is statically
+linked against everything it needs at build time (fontconfig at runtime is
+optional — there is a built-in font-path fallback).
 
 Prefer to review the script before running it?
 

@@ -365,17 +365,13 @@ pub fn help_text() -> String {
     out.push_str(&format!("  {L}cls{R}                {S}Clear terminal{R}\n\n"));
 
     out.push_str(&format!("{B}{C}KEYBOARD SHORTCUTS{R}\n"));
-    out.push_str(&format!("  {A}Ctrl+Shift+C{R}       {S}Copy{R}\n"));
+    out.push_str(&format!("  {A}Ctrl+Shift+C{R}       {S}Copy selection{R}\n"));
     out.push_str(&format!("  {A}Ctrl+Shift+V{R}       {S}Paste cleanly{R}\n"));
-    out.push_str(&format!("  {A}Ctrl+Shift+Enter{R}   {S}New tab{R}\n"));
-    out.push_str(&format!("  {A}Ctrl+Shift+W{R}       {S}Close tab{R}\n"));
-    out.push_str(&format!("  {A}Alt+Number / Ctrl+Tab{R} {S}Switch between tabs{R}\n"));
-    out.push_str(&format!("  {A}Ctrl+Shift+T{R}       {S}Change theme{R}\n"));
-    out.push_str(&format!("  {A}Ctrl+Shift+O{R}       {S}Toggle glass mode (transparency){R}\n"));
-    out.push_str(&format!("  {A}Ctrl+Shift+B{R}       {S}Cycle blur (Static / Smoky / Off){R}\n"));
-    out.push_str(&format!("  {A}Ctrl+Shift+={R}       {S}Increase font size{R}\n"));
-    out.push_str(&format!("  {A}Ctrl+Shift+-{R}       {S}Decrease font size{R}\n"));
-    out.push_str(&format!("  {A}Ctrl+Shift+N{R}       {S}New window{R}\n\n"));
+    out.push_str(&format!("  {A}Ctrl+Shift+T{R}       {S}Change theme (live){R}\n"));
+    out.push_str(&format!("  {A}Ctrl+{R}={A}/{R}- {S}       {S}Increase / decrease font size{R}\n"));
+    out.push_str(&format!("  {A}Shift+PageUp/Down{R}  {S}Scroll the scrollback{R}\n"));
+    out.push_str(&format!("  {A}Mouse wheel{R}        {S}Scroll the scrollback{R}\n"));
+    out.push_str(&format!("  {A}Mouse drag{R}         {S}Select text (release to keep){R}\n\n"));
 
     out.push_str(&format!("{P}◆{R} {S}Built for terminal enthusiasts{R}\n\n"));
     out
@@ -423,7 +419,8 @@ mod tests {
             "UTILITIES",
             "KEYBOARD SHORTCUTS",
             "tuxixi --version",
-            "Ctrl+Shift+Enter",
+            "Ctrl+Shift+T",
+            "Shift+PageUp/Down",
             "Built for terminal enthusiasts",
         ] {
             assert!(out.stdout.contains(needle), "missing: {needle}");

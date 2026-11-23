@@ -204,10 +204,9 @@ if [ "${PATH_NOTE:-0}" = "1" ]; then
 fi
 
 if ! "$BIN_DIR/tuxixi" --version 2>/dev/null; then
-    echo "  ${AMBER}note:${RESET} the binary could not run yet. TUXIXI needs"
-    echo "        GTK4 and VTE 3.91 at runtime, e.g.:"
-    echo "        ${DIM}Debian/Ubuntu: sudo apt install libgtk-4-1 libvte-2.91-gtk4-1${RESET}"
-    echo "        ${DIM}Arch: sudo pacman -S gtk4 vte4   Fedora: sudo dnf install gtk4 vte291-gtk4${RESET}"
+    echo "  ${AMBER}note:${RESET} the binary could not run on this machine."
+    echo "        TUXIXI is a pure-Rust binary (no GTK needed) - check"
+    echo "        that the download matched your architecture (x86_64)."
     echo ""
 fi
 

@@ -2,15 +2,23 @@
 name = "tuxixi"
 version = "0.0.2"
 edition = "2021"
-description = "TUXIXI Terminal - Rust implementation (core, CLI and GTK4 GUI)"
+description = "TUXIXI Terminal - Rust implementation (core, CLI and winit GUI)"
 license = "GPL-3.0"
 
 [features]
-# The GTK4 GUI requires libgtk-4-dev and libvte-2.91-gtk4-dev (VTE 3.91)
-# at build time. The core library and the `tuxixi` CLI build without it:
+# The GUI is built on winit + softbuffer (CPU framebuffer) + ab_glyph
+# (font rasterization) + the `vte` parser crate. It needs NO system GUI
+# libraries at build time (GTK4/VTE were removed to cut idle RAM from
+# ~240 MB down to single-digit MBs).
 #   cargo build                    -> core + CLI
-#   cargo build --features gui     -> core + CLI + GTK4 terminal GUI
-gui = ["dep:gtk4", "dep:vte4"]
+#   cargo build --features gui     -> core + CLI + winit terminal GUI
+gui = [
+    "dep:winit",
+    "dep:softbuffer",
+    "dep:ab_glyph",
+    "dep:nix",
+    "dep:arboard",
+]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -18,10 +26,24 @@ serde_json = "1"
 libc = "0.2"
 # SHA-256 for the hash-based update system (tuxixi update --self/--theme).
 sha2 = "0.10"
-# vte4 0.10.0 is broken against gtk4 0.11 (missing gtk::Accessible), so the
-# gui feature pins the working pair: gtk4 0.10 + vte4 0.9.
-gtk4 = { version = "0.10", optional = true, features = ["v4_12"] }
-vte4 = { version = "0.9", optional = true }
+
+# --- GUI stack (all pure Rust, no pkg-config, no system dev packages) ---
+# Windowing / event loop (Alacritty's window layer).
+winit = { version = "0.30", optional = true }
+# CPU framebuffer presentation.
+softbuffer = { version = "0.4", optional = true }
+# Font parsing + rasterization.
+ab_glyph = { version = "0.2", optional = true }
+# VT/ANSI escape-sequence parser (same parser family Alacritty uses;
+# the widget-free parser crate, not the GTK VTE binding). Pure Rust and
+# tiny, so it stays in the core library even for CLI-only builds.
+vte = "0.13"
+# Wide-character column measurement for the grid.
+unicode-width = "0.2"
+# PTY: openpty / fork / setsid / execvp / kill.
+nix = { version = "0.29", optional = true, features = ["term", "process", "signal", "fs"] }
+# Clipboard (copy/paste). No image support -> smaller dependency tree.
+arboard = { version = "3", optional = true, default-features = false }
 
 [lib]
 name = "tuxixi"

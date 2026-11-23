@@ -21,6 +21,13 @@ pub const DEFAULT_FONT_SIZE: u32 = 11;
 pub const MIN_FONT_SIZE: u32 = 6;
 pub const MAX_FONT_SIZE: u32 = 48;
 
+/// Glass mode defaults. Glass = translucent terminal background with a
+/// compositor blur-behind request (see `crate::glass`), so the desktop
+/// bleeds through the empty parts of the window while text stays crisp.
+pub const DEFAULT_GLASS_OPACITY: f32 = 0.80;
+pub const MIN_GLASS_OPACITY: f32 = 0.10;
+pub const MAX_GLASS_OPACITY: f32 = 1.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BlurMode {
@@ -71,6 +78,10 @@ pub struct Settings {
     pub theme: String,
     pub transparent: bool,
     pub blur_mode: BlurMode,
+    /// Glass mode: translucent background + compositor blur.
+    pub glass: bool,
+    /// Background opacity used when `glass` is on (MIN..=MAX).
+    pub glass_opacity: f32,
 }
 
 impl Default for Settings {
@@ -81,6 +92,8 @@ impl Default for Settings {
             theme: DEFAULT_THEME.to_string(),
             transparent: false,
             blur_mode: BlurMode::Off,
+            glass: true,
+            glass_opacity: DEFAULT_GLASS_OPACITY,
         }
     }
 }
@@ -134,6 +147,19 @@ impl Settings {
                 if let Some(m) = BlurMode::from_str(mode) {
                     s.blur_mode = m;
                 }
+            }
+        }
+
+        if let Some(v) = obj.get("glass") {
+            if let Some(g) = v.as_bool() {
+                s.glass = g;
+            }
+        }
+
+        if let Some(v) = obj.get("glass_opacity") {
+            // Numbers only, no booleans, no NaN/inf, clamped to range.
+            if let Some(op) = v.as_f64().filter(|x| x.is_finite()) {
+                s.glass_opacity = (op as f32).clamp(MIN_GLASS_OPACITY, MAX_GLASS_OPACITY);
             }
         }
 
@@ -293,6 +319,29 @@ impl SettingsManager {
         self.set(s)
     }
 
+    /// Flip the glass mode on/off (persisted). Returns whether changed.
+    pub fn toggle_glass(&mut self) -> bool {
+        let mut s = self.data.clone();
+        s.glass = !s.glass;
+        self.set(s)
+    }
+
+    /// Set the glass background opacity, clamped to the valid range.
+    /// Returns whether anything changed (a clamped-but-equal value is
+    /// also a no-op).
+    pub fn set_glass_opacity(&mut self, opacity: f32) -> bool {
+        if !opacity.is_finite() {
+            return false;
+        }
+        let clamped = opacity.clamp(MIN_GLASS_OPACITY, MAX_GLASS_OPACITY);
+        if (self.data.glass_opacity - clamped).abs() < f32::EPSILON {
+            return false;
+        }
+        let mut s = self.data.clone();
+        s.glass_opacity = clamped;
+        self.set(s)
+    }
+
     fn notify_all(&self) {
         for l in &self.listeners {
             l(&self.data);
@@ -387,6 +436,8 @@ mod tests {
         assert_eq!(s.theme, "TokyoNight");
         assert!(!s.transparent);
         assert_eq!(s.blur_mode, BlurMode::Off);
+        assert!(s.glass, "glass blur is on by default");
+        assert_eq!(s.glass_opacity, DEFAULT_GLASS_OPACITY);
     }
 
     #[test]
@@ -576,6 +627,87 @@ mod tests {
         assert_eq!(mgr.get().blur_mode, BlurMode::Smoky);
         mgr.cycle_blur_mode();
         assert_eq!(mgr.get().blur_mode, BlurMode::Off);
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn glass_fields_validate_and_clamp() {
+        let raw = serde_json::json!({"glass": false, "glass_opacity": 0.5});
+        let s = Settings::validate_raw(&raw);
+        assert!(!s.glass);
+        assert_eq!(s.glass_opacity, 0.5);
+
+        // Out of range values clamp into [MIN, MAX].
+        let raw = serde_json::json!({"glass_opacity": 5.0});
+        assert_eq!(Settings::validate_raw(&raw).glass_opacity, MAX_GLASS_OPACITY);
+        let raw = serde_json::json!({"glass_opacity": 0.0});
+        assert_eq!(Settings::validate_raw(&raw).glass_opacity, MIN_GLASS_OPACITY);
+
+        // Non-numbers, booleans, NaN and inf all fall back to default.
+        for junk in ["0.9", "true", "NaN"] {
+            let raw = serde_json::json!({"glass_opacity": junk});
+            assert_eq!(
+                Settings::validate_raw(&raw).glass_opacity,
+                DEFAULT_GLASS_OPACITY,
+                "junk value {junk} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn glass_opacity_rejects_nan_and_inf() {
+        let raw = serde_json::json!({"glass_opacity": 1.0f64 / 0.0f64});
+        assert_eq!(Settings::validate_raw(&raw).glass_opacity, DEFAULT_GLASS_OPACITY);
+        let raw = serde_json::json!({"glass_opacity": -(1.0f64 / 0.0f64)});
+        assert_eq!(Settings::validate_raw(&raw).glass_opacity, DEFAULT_GLASS_OPACITY);
+        let raw = serde_json::json!({"glass_opacity": serde_json::Value::Null});
+        assert_eq!(Settings::validate_raw(&raw).glass_opacity, DEFAULT_GLASS_OPACITY);
+        let raw = serde_json::json!({"glass_opacity": true});
+        assert_eq!(Settings::validate_raw(&raw).glass_opacity, DEFAULT_GLASS_OPACITY);
+    }
+
+    #[test]
+    fn glass_toggles_and_persists() {
+        let dir = temp_config_dir("glass");
+        let path = dir.join("config.json");
+        let mut mgr = SettingsManager::load(&path);
+        assert!(mgr.get().glass);
+        // A toggle always flips the value, so it is always a change.
+        assert!(mgr.toggle_glass());
+        assert!(!mgr.get().glass);
+        assert!(mgr.toggle_glass());
+        assert!(mgr.get().glass);
+
+        assert!(mgr.set_glass_opacity(0.55));
+        assert_eq!(mgr.get().glass_opacity, 0.55);
+        // Same value is a no-op.
+        assert!(!mgr.set_glass_opacity(0.55));
+        // Out-of-range values clamp instead of storing garbage.
+        assert!(mgr.set_glass_opacity(42.0));
+        assert_eq!(mgr.get().glass_opacity, MAX_GLASS_OPACITY);
+        // NaN / inf are ignored entirely.
+        assert!(!mgr.set_glass_opacity(f32::NAN));
+        assert!(!mgr.set_glass_opacity(f32::INFINITY));
+        assert_eq!(mgr.get().glass_opacity, MAX_GLASS_OPACITY);
+
+        // Reload: everything persisted.
+        let mgr2 = SettingsManager::load(&path);
+        assert!(mgr2.get().glass);
+        assert_eq!(mgr2.get().glass_opacity, MAX_GLASS_OPACITY);
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn glass_opacity_survives_roundtrip() {
+        let dir = temp_config_dir("glassrt");
+        let path = dir.join("config.json");
+        let mut mgr = SettingsManager::load(&path);
+        let mut s = mgr.get().clone();
+        s.glass = false;
+        s.glass_opacity = 0.33;
+        assert!(mgr.set(s.clone()));
+        let mgr2 = SettingsManager::load(&path);
+        assert_eq!(mgr2.get(), &s);
         fs::remove_dir_all(dir).ok();
     }
 

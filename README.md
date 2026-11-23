@@ -4,7 +4,7 @@
 
 A small terminal emulator for Linux, written in Rust.
 
-![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange) ![winit%20+%20softbuffer](https://img.shields.io/badge/GUI-winit%20(pure%20Rust)-blue) ![Platform](https://img.shields.io/badge/Platform-Linux-green) ![License](https://img.shields.io/badge/License-GPL--3.0-yellow)
+![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange) ![winit%20+%20OpenGL](https://img.shields.io/badge/GUI-winit%20%2B%20OpenGL%20(pure%20Rust)-blue) ![Platform](https://img.shields.io/badge/Platform-Linux-green) ![License](https://img.shields.io/badge/License-GPL--3.0-yellow)
 
 </div>
 
@@ -13,12 +13,23 @@ of Python. The old Python code is gone; everything now lives in a single Cargo
 project at the repository root. Releases are built automatically by GitHub
 Actions.
 
-The GUI is pure Rust — winit for the window, a CPU framebuffer renderer,
-`ab_glyph` for fonts and our own VT parser + PTY — the same architecture
-Alacritty uses. You get a real terminal — your own shell (Bash, Zsh, Fish),
-capped 10 000-row scrollback, copy/paste, TrueColor, 32 themes — with
-single-digit-MB idle memory instead of the ~240 MB the old GTK stack took.
-(No tabs any more: one window per terminal, like Alacritty.)
+The GUI is pure Rust — winit for the window, an **OpenGL 3.3 GPU renderer**
+(glutin + glow, the same stack Alacritty uses: glyphs are rasterized once
+into a GPU atlas, every frame is a handful of quads), `ab_glyph` for fonts
+and our own VT parser + PTY. You get a real terminal — your own shell
+(Bash, Zsh, Fish), capped 10 000-row scrollback, copy/paste, TrueColor,
+32 themes — with single-digit-MB idle memory instead of the ~240 MB the
+old GTK stack took. (No tabs any more: one window per terminal, like
+Alacritty.)
+
+### Glass mode
+
+`Ctrl+Shift+G` toggles **glass blur** (on by default at 80 % opacity):
+the terminal background turns translucent and TUXIXI asks your compositor
+(X11 `_KDE_NET_WM_BLUR_BEHIND_REGION`, honored by KWin / picom) to blur
+whatever is behind the window, so the desktop shines through the empty
+parts while text stays fully crisp and opaque. The opacity is stored in
+`~/.config/tuxixi/config.json` as `glass` / `glass_opacity`.
 
 ## Install
 

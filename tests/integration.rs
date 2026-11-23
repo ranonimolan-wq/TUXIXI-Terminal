@@ -110,6 +110,8 @@ fn settings_survive_reload_with_full_content() {
         theme: "Dracula".into(),
         transparent: true,
         blur_mode: BlurMode::Smoky,
+        glass: false,
+        glass_opacity: 0.45,
     };
     mgr.set(s.clone());
 

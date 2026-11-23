@@ -1,12 +1,12 @@
-//! Pure-CPU terminal renderer: paints the [`Terminal`] grid into a
-//! linear `u32` framebuffer (the format `softbuffer` presents to the
-//! window). No GPU, no shader pipeline — the whole frame is a few MB
-//! of plain arithmetic, redrawn only when the PTY, the input or the
-//! scroll offset change.
+//! Terminal drawing logic shared by all renderers: the [`Palette`],
+//! [`Selection`] and the pure color helpers ([`resolve`], [`blend`],
+//! [`pack`], [`fill_rect`], [`blit_glyph`]).
 //!
-//! Every math-heavy helper is a pure function and unit-tested: color
-//! packing/resolution, attribute blending and the pixel output of a
-//! painted grid.
+//! The actual GUI renders on the GPU (`crate::gpu`, OpenGL 3.3); the
+//! [`paint`] function in this module is the CPU reference renderer
+//! that mirrors the exact same cell semantics pixel by pixel — it
+//! doubles as the oracle for the renderer tests. The whole frame is a
+//! few MB of plain arithmetic, so tests can assert on real pixels.
 
 use crate::font::{FontFace, STYLE_BOLD, STYLE_ITALIC};
 use crate::vt::{Cell, Color, Terminal, BOLD, DIM, INVERSE, ITALIC, UNDERLINE, WIDE_SPACER};
@@ -49,7 +49,8 @@ fn rgba_bytes(c: crate::theme::Rgba) -> [u8; 3] {
     ]
 }
 
-/// Pack RGB into softbuffer's opaque 0x00RRGGBB pixel format.
+/// Pack RGB into the CPU reference renderer's opaque 0x00RRGGBB pixel
+/// format.
 pub fn pack(r: u8, g: u8, b: u8) -> u32 {
     ((r as u32) << 16) | ((g as u32) << 8) | b as u32
 }

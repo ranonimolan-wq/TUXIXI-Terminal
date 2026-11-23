@@ -7,27 +7,40 @@
 //! same way Alacritty is:
 //!
 //! * windowing/event loop: `winit` (no toolkit, no main-loop runtime),
-//! * rendering: `softbuffer` CPU framebuffer, repainted only when the
-//!   PTY, the input or the scroll offset actually change,
+//! * rendering: **OpenGL 3.3 core** via `glutin` + `glow` — the same
+//!   stack Alacritty uses; the CPU only builds geometry (`crate::gpu`)
+//!   and rasterizes glyphs once into a GPU atlas, repainted only when
+//!   the PTY, the input or the scroll offset actually change,
+//! * glass: a translucent background alpha plus a compositor
+//!   blur-behind request (`crate::glass`), so the desktop bleeds
+//!   through the empty parts of the window while text stays crisp,
 //! * fonts: `ab_glyph`, rasterized on demand into a bounded cache,
 //! * terminal emulation: our own grid + the `vte` parser (`crate::vt`),
 //! * PTY: our own fork/exec (`crate::pty`),
-//! * memory: every buffer is bounded and trimmed explicitly
-//!   (`crate::mem`, `Terminal::memory_report`).
+//! * memory: every buffer is bounded and freed explicitly
+//!   (`crate::mem`, `Terminal::memory_report`, `GpuRenderer::destroy`,
+//!   `Atlas::reset`).
 //!
 //! Shortcuts:
 //! * Ctrl+Shift+C / Ctrl+Shift+V — copy selection / paste
 //! * Ctrl+Shift+T — cycle theme (persisted via the settings file)
+//! * Ctrl+Shift+G — toggle glass blur (persisted)
 //! * Ctrl+= / Ctrl+- — font size up / down (persisted)
 //! * Shift+PageUp / Shift+PageDown, mouse wheel — scrollback
 //!
-//! Tabs were a GTK-only construct (one GObject stack per tab was a
-//! large share of the idle memory); this build intentionally opens one
-//! window per terminal, like Alacritty.
+//! Tabs are gone for good: they were a GTK-only construct (one
+//! GObject stack per tab was a large share of the idle memory). This
+//! build opens one window per terminal, like Alacritty.
 
+use glutin::config::ConfigTemplateBuilder;
+use glutin::context::{ContextAttributesBuilder, PossiblyCurrentContext};
+use glutin::display::GetGlDisplay;
+use glutin::prelude::*;
+use glutin::surface::{GlSurface, Surface as GlutinSurface, WindowSurface};
+use glutin_winit::DisplayBuilder;
+use std::num::NonZeroU32;
 use std::sync::Arc;
-
-use softbuffer::{Context, Surface};
+use raw_window_handle::HasWindowHandle;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
@@ -36,11 +49,12 @@ use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 use crate::font::{load_default_face, FontFace};
+use crate::gpu::{build_scene, clear_color, Atlas, GpuRenderer, GlassParams};
 use crate::input::{self, Modifiers};
 use crate::input::Key as InputKey;
 use crate::pty::{kill_child, Pty, PtyEvent};
-use crate::render::{paint, Palette, Selection};
-use crate::settings::{BlurMode, Settings, SettingsManager};
+use crate::render::{Palette, Selection};
+use crate::settings::{Settings, SettingsManager};
 use crate::shell;
 use crate::theme;
 use crate::vt::Terminal;
@@ -53,6 +67,33 @@ const MAX_PX: i32 = 40;
 /// Lines per mouse-wheel notch.
 const WHEEL_STEP: f32 = 3.0;
 
+/// GPU-side state for one window. Field order matters: Rust drops
+/// fields in declaration order, so the renderer (which owns GL
+/// objects) is dropped BEFORE the surface/context die.
+struct GlBackend {
+    renderer: GpuRenderer,
+    atlas: Atlas,
+    surface: GlutinSurface<WindowSurface>,
+    context: PossiblyCurrentContext,
+}
+
+impl GlBackend {
+    /// Present the last rendered frame.
+    fn present(&self) {
+        if let Err(e) = self.surface.swap_buffers(&self.context) {
+            eprintln!("swap_buffers failed: {e:?}");
+        }
+    }
+
+    /// Resize the GL surface (must match the window size).
+    fn resize(&self, width: u32, height: u32) {
+        let (Some(w), Some(h)) = (NonZeroU32::new(width), NonZeroU32::new(height)) else {
+            return;
+        };
+        self.surface.resize(&self.context, w, h);
+    }
+}
+
 struct App {
     settings: Settings,
     settings_mgr: SettingsManager,
@@ -60,12 +101,13 @@ struct App {
     pty: Option<Pty>,
     face: FontFace,
     palette: Palette,
+    glass: GlassParams,
     scroll_offset: usize,
     mods: ModifiersState,
     window: Option<Arc<Window>>,
-    context: Option<Context<Arc<Window>>>,
-    surface: Option<Surface<Arc<Window>, Arc<Window>>>,
-    frame: Vec<u32>,
+    gl: Option<GlBackend>,
+    /// X11 window id for the compositor blur request (glass mode).
+    x11_window_id: Option<u32>,
     selection: Option<Selection>,
     select_anchor: Option<(u16, u16)>,
     mouse_pos: (i32, i32),
@@ -74,8 +116,12 @@ struct App {
 
 impl App {
     fn palette_from_settings(s: &Settings) -> Palette {
-        let colors = theme::terminal_colors(&s.theme, false, BlurMode::Off.as_str());
+        let colors = theme::terminal_colors(&s.theme, false, s.blur_mode.as_str());
         Palette::from_terminal_colors(&colors)
+    }
+
+    fn glass_from_settings(s: &Settings) -> GlassParams {
+        GlassParams::new(s.glass, s.glass_opacity)
     }
 
     fn reload_face(&mut self) {
@@ -101,17 +147,9 @@ impl App {
             if let Some(pty) = &self.pty {
                 pty.resize(cols, rows);
             }
-            // Manual memory: the frame buffer is one Vec, re-allocated
-            // (freed) only on real resizes.
-            let px_w = cols as usize * self.face.metrics.cell_width.max(1) as usize;
-            let px_h = rows as usize * self.face.metrics.line_height.max(1) as usize;
-            self.frame = vec![0u32; px_w * px_h];
         }
-        if let Some(surface) = &mut self.surface {
-            let _ = surface.resize(
-                std::num::NonZeroU32::new(w.max(1)).unwrap(),
-                std::num::NonZeroU32::new(h.max(1)).unwrap(),
-            );
+        if let Some(gl) = &self.gl {
+            gl.resize(w.max(1), h.max(1));
         }
         self.scroll_offset = 0;
         if let Some(win) = &self.window {
@@ -121,32 +159,48 @@ impl App {
 
     fn redraw(&mut self) {
         let Some(win) = &self.window else { return };
+        let Some(gl) = &mut self.gl else { return };
         let size = win.inner_size();
-        let (w, h) = (size.width.max(1) as usize, size.height.max(1) as usize);
-        if self.frame.len() != w * h {
-            self.frame = vec![0u32; w * h];
-        }
-        paint(
-            &mut self.frame,
-            w,
-            h,
+        let (w, h) = (size.width.max(1), size.height.max(1));
+
+        // One scene build per repaint: the CPU walks the grid once and
+        // produces quads; everything else happens on the GPU.
+        let scene = build_scene(
             &self.term,
             self.scroll_offset,
             &self.palette,
             &mut self.face,
+            &mut gl.atlas,
             self.selection.as_ref(),
+            self.glass,
         );
-        if let Some(surface) = &mut self.surface {
-            match surface.buffer_mut() {
-                Ok(mut buffer) => {
-                    // Copy only the overlapping prefix: the softbuffer
-                    // buffer may be padded relative to our frame.
-                    let n = buffer.len().min(self.frame.len());
-                    buffer[..n].copy_from_slice(&self.frame[..n]);
-                    let _ = buffer.present();
+        let clear = clear_color(&self.palette, self.glass);
+        gl.renderer.render(
+            &scene,
+            &mut gl.atlas,
+            w as i32,
+            h as i32,
+            clear,
+        );
+        gl.present();
+    }
+
+    /// Re-request (or remove) the compositor blur property after a
+    /// glass toggle at runtime.
+    fn apply_glass_to_compositor(&mut self) {
+        if let Some(id) = self.x11_window_id {
+            if self.glass.enabled {
+                let outcome = crate::glass::request_blur(id);
+                if outcome != crate::glass::BlurOutcome::Requested {
+                    // Glass still renders (translucency), the
+                    // compositor just does not blur. Not an error.
                 }
-                Err(e) => eprintln!("frame buffer error: {e:?}"),
+            } else {
+                crate::glass::remove_blur(id);
             }
+        }
+        if let Some(win) = &self.window {
+            win.request_redraw();
         }
     }
 
@@ -255,6 +309,14 @@ impl App {
                 }
                 true
             }
+            InputKey::Char('g') => {
+                if self.settings_mgr.toggle_glass() {
+                    self.settings = self.settings_mgr.get().clone();
+                    self.glass = Self::glass_from_settings(&self.settings);
+                    self.apply_glass_to_compositor();
+                }
+                true
+            }
             _ => false,
         }
     }
@@ -317,16 +379,84 @@ impl ApplicationHandler<PtyEvent> for App {
         if self.window.is_some() {
             return;
         }
+
+        // The window is ALWAYS created with an alpha-capable visual so
+        // the glass mode can be toggled at runtime; when glass is off
+        // the renderer clears fully opaque, which looks identical to a
+        // plain window.
         let attrs = Window::default_attributes()
             .with_title("TUXIXI Terminal")
+            .with_transparent(true)
             .with_inner_size(PhysicalSize::new(INITIAL_SIZE.0, INITIAL_SIZE.1));
-        let window = Arc::new(el.create_window(attrs).expect("create window"));
 
-        let context = Context::new(window.clone()).expect("softbuffer context");
-        let surface = Surface::new(&context, window.clone()).expect("softbuffer surface");
-        self.context = Some(context);
-        self.surface = Some(surface);
+        let template = ConfigTemplateBuilder::new()
+            .with_alpha_size(8)
+            .with_transparency(true);
+
+        // One call: GL display + config selection + window creation
+        // (the config must be chosen BEFORE the window so the correct
+        // visual/colormap is used — the GLX rule).
+        let (window, gl_config) = DisplayBuilder::new()
+            .with_window_attributes(Some(attrs))
+            .build(el, template, |mut configs| {
+                configs
+                    .next()
+                    .expect("no compatible OpenGL config found")
+            })
+            .expect("create GL window");
+        let window = Arc::new(window.expect("DisplayBuilder must create a window"));
         self.window = Some(window.clone());
+
+        let size = window.inner_size();
+        let gl_display = gl_config.display();
+        let raw_window = window.window_handle().expect("window handle").as_raw();
+        let context_attrs = ContextAttributesBuilder::new().build(Some(raw_window));
+        let surface_attrs = glutin::surface::SurfaceAttributesBuilder::<WindowSurface>::new()
+            .build(
+                raw_window,
+                NonZeroU32::new(size.width.max(1)).unwrap(),
+                NonZeroU32::new(size.height.max(1)).unwrap(),
+            );
+
+        let not_current = unsafe {
+            gl_display
+                .create_context(&gl_config, &context_attrs)
+                .expect("create OpenGL context")
+        };
+        let surface = unsafe {
+            gl_display
+                .create_window_surface(&gl_config, &surface_attrs)
+                .expect("create GL window surface")
+        };
+
+        let context = not_current.make_current(&surface).expect("make GL context current");
+
+        // Vsync off: the terminal only redraws when content changes,
+        // so tearing on the rare updates costs less than the latency
+        // of blocking swap.
+        let _ = surface.set_swap_interval(&context, glutin::surface::SwapInterval::DontWait);
+
+        let gl = Arc::new(unsafe {
+            glow::Context::from_loader_function(|name| {
+                let name = std::ffi::CString::new(name).unwrap();
+                gl_display.get_proc_address(name.as_c_str()) as *const _
+            })
+        });
+        let renderer = GpuRenderer::new(gl.clone()).expect("initialize GL renderer");
+
+        self.gl = Some(GlBackend {
+            renderer,
+            atlas: Atlas::default(),
+            surface,
+            context,
+        });
+
+        self.x11_window_id = x11_window_id(&window);
+        if self.glass.enabled {
+            if let Some(id) = self.x11_window_id {
+                let _ = crate::glass::request_blur(id);
+            }
+        }
 
         let size = window.inner_size();
         let (cols, rows) = self.grid_size_for(size.width.max(1), size.height.max(1));
@@ -421,7 +551,7 @@ impl ApplicationHandler<PtyEvent> for App {
                     return;
                 };
 
-                // GUI shortcuts (Ctrl+Shift+C/V/T) run before the child.
+                // GUI shortcuts (Ctrl+Shift+C/V/T/G) run before the child.
                 if ctrl && shift && self.handle_shortcut(&key) {
                     return;
                 }
@@ -517,18 +647,43 @@ impl ApplicationHandler<PtyEvent> for App {
 }
 
 impl App {
-    /// Explicit teardown: close the PTY master, tell the child to go.
+    /// Explicit teardown, mirroring the CPU renderer's manual memory
+    /// hygiene: delete every GL object, release the GL context, close
+    /// the PTY master, trim the terminal buffers.
     fn exiting_cleanup(&mut self) {
         if let Some(pty) = &mut self.pty {
             pty.shutdown();
         }
         kill_child();
-        // Release the big buffers explicitly instead of waiting for the
-        // process to die with them.
-        self.frame.clear();
-        self.frame.shrink_to_fit();
+
+        if let Some(gl) = self.gl.take() {
+            let GlBackend {
+                renderer: mut r,
+                mut atlas,
+                surface,
+                context,
+            } = gl;
+            atlas.reset();
+            r.destroy();
+            drop(r);
+            drop(atlas);
+            // Release the current context before the surface dies.
+            drop(context.make_not_current());
+            drop(surface);
+        }
         self.face.clear_cache();
         self.term.maintain_memory();
+    }
+}
+
+/// X11 window id from the winit window (for the glass blur property).
+/// None on Wayland / macOS / Windows.
+fn x11_window_id(window: &Window) -> Option<u32> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match window.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Xcb(h) => Some(h.window.get()),
+        RawWindowHandle::Xlib(h) => Some(h.window as u32),
+        _ => None,
     }
 }
 
@@ -578,6 +733,7 @@ pub fn run() {
         .expect("build winit event loop");
     let proxy = event_loop.create_proxy();
 
+    let glass = App::glass_from_settings(&settings);
     let mut app = App {
         settings,
         settings_mgr,
@@ -585,12 +741,12 @@ pub fn run() {
         pty: None,
         face,
         palette,
+        glass,
         scroll_offset: 0,
         mods: ModifiersState::empty(),
         window: None,
-        context: None,
-        surface: None,
-        frame: Vec::new(),
+        gl: None,
+        x11_window_id: None,
         selection: None,
         select_anchor: None,
         mouse_pos: (0, 0),

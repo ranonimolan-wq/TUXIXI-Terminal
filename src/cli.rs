@@ -368,6 +368,7 @@ pub fn help_text() -> String {
     out.push_str(&format!("  {A}Ctrl+Shift+C{R}       {S}Copy selection{R}\n"));
     out.push_str(&format!("  {A}Ctrl+Shift+V{R}       {S}Paste cleanly{R}\n"));
     out.push_str(&format!("  {A}Ctrl+Shift+T{R}       {S}Change theme (live){R}\n"));
+    out.push_str(&format!("  {A}Ctrl+Shift+G{R}       {S}Toggle glass blur{R}\n"));
     out.push_str(&format!("  {A}Ctrl+{R}={A}/{R}- {S}       {S}Increase / decrease font size{R}\n"));
     out.push_str(&format!("  {A}Shift+PageUp/Down{R}  {S}Scroll the scrollback{R}\n"));
     out.push_str(&format!("  {A}Mouse wheel{R}        {S}Scroll the scrollback{R}\n"));

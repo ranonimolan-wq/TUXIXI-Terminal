@@ -6,18 +6,23 @@ description = "TUXIXI Terminal - Rust implementation (core, CLI and winit GUI)"
 license = "GPL-3.0"
 
 [features]
-# The GUI is built on winit + softbuffer (CPU framebuffer) + ab_glyph
-# (font rasterization) + the `vte` parser crate. It needs NO system GUI
-# libraries at build time (GTK4/VTE were removed to cut idle RAM from
-# ~240 MB down to single-digit MBs).
+# The GUI is built on winit + OpenGL 3.3 (glutin + glow, the Alacritty
+# windowing/rendering stack) + ab_glyph (CPU-side font rasterization)
+# + the `vte` parser crate. It needs NO system GUI dev libraries at
+# build time (GTK4/VTE were removed to cut idle RAM from ~240 MB down
+# to single-digit MBs).
 #   cargo build                    -> core + CLI
 #   cargo build --features gui     -> core + CLI + winit terminal GUI
 gui = [
     "dep:winit",
-    "dep:softbuffer",
+    "dep:glutin",
+    "dep:glutin-winit",
+    "dep:glow",
     "dep:ab_glyph",
     "dep:nix",
     "dep:arboard",
+    "dep:x11-dl",
+    "dep:raw-window-handle",
 ]
 
 [dependencies]
@@ -30,8 +35,19 @@ sha2 = "0.10"
 # --- GUI stack (all pure Rust, no pkg-config, no system dev packages) ---
 # Windowing / event loop (Alacritty's window layer).
 winit = { version = "0.30", optional = true }
-# CPU framebuffer presentation.
-softbuffer = { version = "0.4", optional = true }
+# OpenGL context creation + window-surface integration. glutin dlopens
+# libEGL/libGL at RUNTIME (libloading / x11-dl), so no GL dev headers
+# are needed at build time.
+glutin = { version = "0.32", optional = true }
+glutin-winit = { version = "0.5", optional = true }
+# Raw OpenGL 3.3 core bindings (Alacritty's rendering approach).
+glow = { version = "0.16", optional = true }
+# Xlib runtime loader used ONLY to set the KDE blur-behind property
+# for the glass mode (dlopened at runtime, pure Rust bindings).
+x11-dl = { version = "2", optional = true }
+# Window-handle introspection: the X11 window id for the glass blur
+# property (already in the tree via winit/glutin; direct dep for API).
+raw-window-handle = { version = "0.6", optional = true }
 # Font parsing + rasterization.
 ab_glyph = { version = "0.2", optional = true }
 # VT/ANSI escape-sequence parser (same parser family Alacritty uses;

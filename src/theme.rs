@@ -370,8 +370,8 @@ pub struct TerminalColors {
 /// Resolve every color a terminal needs for the given theme and glass
 /// mode. Unknown theme names fall back to the default theme (TokyoNight)
 /// exactly like [`get_colors`]. This is the single source of truth used
-/// by the GUI both at startup, when the user switches the theme and —
-/// critically — when a NEW tab is created, so every tab always opens
+/// by the GUI both at startup and whenever the user switches the theme
+/// live (Ctrl+Shift+T) — the one-window-per-terminal build always opens
 /// with the currently selected theme.
 pub fn terminal_colors(theme_name: &str, transparent: bool, blur_mode: &str) -> TerminalColors {
     let reg = Registry::global();

@@ -26,7 +26,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       # No system packages needed any more: the GUI is pure Rust
-      # (winit + softbuffer + ab_glyph). GTK4/VTE were removed.
+      # (winit + glutin/glow OpenGL + ab_glyph). GTK4/VTE were removed.
+      # glutin dlopens libEGL/libGL at runtime, so even the GL stack
+      # needs no dev headers at build time.
 
       - name: Test (core, no GUI feature)
         run: cargo test

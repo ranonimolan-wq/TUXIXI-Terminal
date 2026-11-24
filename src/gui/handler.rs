@@ -18,6 +18,7 @@ use super::env::{passwd_shell, shell_env};
 use super::gl::{
     x11_window_id, CreatedGl, GlApi, GlProfile, GL_INIT_LADDER, GL_INIT_LADDER_ES_FIRST,
 };
+use crate::clip::Which;
 use crate::input::{self, Key as InputKey};
 use crate::pty::{Pty, PtyEvent};
 use crate::render::Selection;
@@ -277,30 +278,65 @@ impl ApplicationHandler<PtyEvent> for App {
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                if button != winit::event::MouseButton::Left {
-                    return;
-                }
-                match state {
-                    ElementState::Pressed => {
-                        let cell = self.cell_at(self.mouse_pos.0, self.mouse_pos.1);
-                        self.select_anchor = Some(cell);
-                        self.selection = None;
-                    }
-                    ElementState::Released => {
-                        if let Some(anchor) = self.select_anchor {
-                            let cell = self.cell_at(self.mouse_pos.0, self.mouse_pos.1);
-                            if anchor != cell {
-                                self.selection = Some(Selection {
-                                    start: anchor,
-                                    end: cell,
-                                });
+                match button {
+                    winit::event::MouseButton::Left => {
+                        match state {
+                            ElementState::Pressed => {
+                                let cell = self.cell_at(self.mouse_pos.0, self.mouse_pos.1);
+                                self.select_anchor = Some(cell);
+                                self.selection = None;
                             }
-                            self.select_anchor = None;
-                            if let Some(win) = &self.window {
-                                win.request_redraw();
+                            ElementState::Released => {
+                                if let Some(anchor) = self.select_anchor {
+                                    let cell = self.cell_at(self.mouse_pos.0, self.mouse_pos.1);
+                                    if anchor != cell {
+                                        let sel = Selection {
+                                            start: anchor,
+                                            end: cell,
+                                        };
+                                        self.selection = Some(sel);
+                                        // Drag-select copies immediately,
+                                        // matching the mainstream terminal
+                                        // behavior: PRIMARY is what other
+                                        // X11 clients read for a
+                                        // select-then-paste flow, and
+                                        // CLIPBOARD is what desktop
+                                        // applications paste with Ctrl+V,
+                                        // so a plain selection is
+                                        // pasteable in both worlds without
+                                        // an explicit copy shortcut.
+                                        let text = sel.text(&self.term);
+                                        if !text.is_empty() {
+                                            self.clipboards.store(Which::Primary, &text);
+                                            self.clipboards.store(Which::Clipboard, &text);
+                                        }
+                                    }
+                                    self.select_anchor = None;
+                                    if let Some(win) = &self.window {
+                                        win.request_redraw();
+                                    }
+                                }
                             }
                         }
                     }
+                    winit::event::MouseButton::Middle => {
+                        // Middle-click pastes the PRIMARY selection
+                        // (the mouse selection), bracketed-paste
+                        // encoded like every other paste path.
+                        if state == ElementState::Pressed {
+                            match self.clipboards.load(Which::Primary) {
+                                Ok(text) => {
+                                    let bytes =
+                                        input::encode_paste(&text, self.term.bracketed_paste());
+                                    if let Some(pty) = &self.pty {
+                                        pty.write(&bytes);
+                                    }
+                                }
+                                Err(e) => eprintln!("primary paste failed: {e}"),
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {

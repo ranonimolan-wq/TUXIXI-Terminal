@@ -10,3 +10,5 @@
 - feat(debug): permanent TUXIXI_DEBUG_INPUT trace (key events, PTY I/O).
 - docs: knowledge/history/bug_fixes.md + engine_features.md updated,
   memory bank synced. Previous session's AltGr row remains in bug_fixes.
+
+- 2026-11-24: dual-selection clipboard (copypasta) shipped; RAM comparison documented; all checks green (clippy 0, fmt 100%, 209 tests).

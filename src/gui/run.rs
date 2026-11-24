@@ -8,6 +8,7 @@
 use winit::event_loop::EventLoop;
 use winit::keyboard::ModifiersState;
 
+use crate::clip::Pasteboards;
 use crate::font::load_default_face;
 use crate::settings::SettingsManager;
 use crate::vt::Terminal;
@@ -35,15 +36,9 @@ pub fn run() {
     let proxy = event_loop.create_proxy();
 
     let glass = App::glass_from_settings(&settings);
-    // One clipboard owner for the whole session (see the field docs:
-    // a per-copy instance loses the X11 selection ownership on drop).
-    let clipboard = match arboard::Clipboard::new() {
-        Ok(c) => Some(c),
-        Err(e) => {
-            eprintln!("clipboard unavailable, copy/paste disabled: {e}");
-            None
-        }
-    };
+    // One pasteboard owner for the whole session (see the field docs:
+    // per-copy providers lose the X11 selection ownership on drop).
+    let clipboards = Pasteboards::open();
     let mut app = App {
         settings,
         settings_mgr,
@@ -62,7 +57,7 @@ pub fn run() {
         mouse_pos: (0, 0),
         grid_buf: Vec::new(),
         proxy,
-        clipboard,
+        clipboards,
     };
 
     if let Err(e) = event_loop.run_app(&mut app) {

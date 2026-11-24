@@ -22,6 +22,7 @@ use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::Window;
 
+use crate::clip::{Pasteboards, Which};
 use crate::font::{load_default_face, FontFace};
 use crate::gpu::{build_scene, clear_color, Atlas, GlassParams, GpuRenderer, SceneInputs};
 use alacritty_terminal::event::WindowSize;
@@ -39,6 +40,18 @@ use crate::settings::{Settings, SettingsManager};
 use crate::shell;
 use crate::theme;
 use crate::vt::{indexed_color, Cell, Color, TermEvent, Terminal};
+
+/// Map the emulation engine's clipboard kind onto the X11 selection it
+/// names. The mapping is the mainstream terminal convention:
+/// `ClipboardType::Clipboard` -> `CLIPBOARD` (Ctrl+Shift+C/V),
+/// `ClipboardType::Selection` -> `PRIMARY` (mouse selection,
+/// middle-click paste).
+fn clipboard_type_to_which(ty: ClipboardType) -> Which {
+    match ty {
+        ClipboardType::Clipboard => Which::Clipboard,
+        ClipboardType::Selection => Which::Primary,
+    }
+}
 
 /// Initial window size in pixels.
 const INITIAL_SIZE: (u32, u32) = (960, 600);
@@ -67,13 +80,13 @@ pub(crate) struct App {
     /// by the App so the per-frame render path stays allocation-free.
     pub(crate) grid_buf: Vec<Cell>,
     pub(crate) proxy: EventLoopProxy<PtyEvent>,
-    /// Long-lived clipboard provider. On X11, the clipboard is OWNED
-    /// by the process: arboard serves the selection from a thread tied
-    /// to this instance, so it must outlive every copy. Creating it per
-    /// shortcut (the old approach) made the copied data evaporate the
-    /// moment the handler returned — copy looked "done" but a later
-    /// paste found nothing.
-    pub(crate) clipboard: Option<arboard::Clipboard>,
+    /// Long-lived pasteboard owner (see [`crate::clip::Pasteboards`]).
+    /// On X11 the process OWNS the selections it stores: the provider
+    /// answers selection requests from background threads tied to this
+    /// instance, so it must outlive every copy. A per-copy provider
+    /// drops ownership the moment the handler returns — copy looks
+    /// "done" but a later paste in another application finds nothing.
+    pub(crate) clipboards: Pasteboards,
 }
 
 impl App {
@@ -424,31 +437,21 @@ impl App {
                     }
                     if text.is_empty() {
                         eprintln!("copy: selection is empty, nothing to copy");
-                    } else {
-                        match self.clipboard.as_mut() {
-                            Some(clip) => {
-                                if let Err(e) = clip.set_text(&text) {
-                                    eprintln!("clipboard copy failed: {e}");
-                                }
-                            }
-                            None => eprintln!("clipboard unavailable"),
-                        }
+                    } else if !self.clipboards.store(Which::Clipboard, &text) {
+                        eprintln!("clipboard copy failed");
                     }
                 }
                 true
             }
             Some(Shortcut::Paste) => {
-                match self.clipboard.as_mut() {
-                    Some(clip) => match clip.get_text() {
-                        Ok(text) => {
-                            let bytes = input::encode_paste(&text, self.term.bracketed_paste());
-                            if let Some(pty) = &self.pty {
-                                pty.write(&bytes);
-                            }
+                match self.clipboards.load(Which::Clipboard) {
+                    Ok(text) => {
+                        let bytes = input::encode_paste(&text, self.term.bracketed_paste());
+                        if let Some(pty) = &self.pty {
+                            pty.write(&bytes);
                         }
-                        Err(e) => eprintln!("clipboard paste failed: {e}"),
-                    },
-                    None => eprintln!("clipboard unavailable"),
+                    }
+                    Err(e) => eprintln!("clipboard paste failed: {e}"),
                 }
                 true
             }
@@ -524,23 +527,20 @@ impl App {
             match event {
                 TermEvent::PtyWrite(bytes) => responses.push(bytes),
                 TermEvent::ClipboardStore(ty, text) => {
-                    // Only the main selection is served; secondary
-                    // selection requests are ignored.
-                    if matches!(ty, ClipboardType::Clipboard) {
-                        if let Some(clip) = self.clipboard.as_mut() {
-                            let _ = clip.set_text(&text);
-                        }
+                    // `Clipboard` is the desktop clipboard; `Selection`
+                    // is the PRIMARY selection (e.g. vi-mode yank with
+                    // an OSC 52 selection target).
+                    let which = clipboard_type_to_which(ty);
+                    if !self.clipboards.store(which, &text) {
+                        eprintln!("OSC 52 clipboard store failed");
                     }
                 }
                 TermEvent::ClipboardLoad(ty, fmt) => {
-                    // Only the main selection is served; anything else
-                    // would leak the selection buffer to the child.
-                    if matches!(ty, ClipboardType::Clipboard) {
-                        if let Some(clip) = self.clipboard.as_mut() {
-                            if let Ok(text) = clip.get_text() {
-                                responses.push(fmt(&text).into_bytes());
-                            }
-                        }
+                    // Serve the requested selection back to the child.
+                    let which = clipboard_type_to_which(ty);
+                    match self.clipboards.load(which) {
+                        Ok(text) => responses.push(fmt(&text).into_bytes()),
+                        Err(e) => eprintln!("clipboard load failed: {e}"),
                     }
                 }
                 TermEvent::ColorRequest(index, fmt) => {
@@ -630,5 +630,25 @@ impl App {
         }
         self.face.clear_cache();
         self.term.maintain_memory();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The emulation engine reports which selection an OSC 52 request
+    /// targets; the pasteboard layer must route it to the matching X11
+    /// selection or the child reads/writes the wrong buffer.
+    #[test]
+    fn osc52_kinds_route_to_the_matching_selection() {
+        assert_eq!(
+            clipboard_type_to_which(ClipboardType::Clipboard),
+            Which::Clipboard
+        );
+        assert_eq!(
+            clipboard_type_to_which(ClipboardType::Selection),
+            Which::Primary
+        );
     }
 }

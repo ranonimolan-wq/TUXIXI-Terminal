@@ -20,7 +20,7 @@ gui = [
     "dep:glow",
     "dep:freetype-rs",
     "dep:nix",
-    "dep:arboard",
+    "dep:copypasta",
     "dep:x11-dl",
     "dep:raw-window-handle",
 ]
@@ -63,8 +63,12 @@ alacritty_terminal = "0.26"
 unicode-width = "0.2"
 # PTY: openpty / fork / setsid / execvp / kill.
 nix = { version = "0.29", optional = true, features = ["term", "process", "signal", "fs", "user"] }
-# Clipboard (copy/paste). No image support -> smaller dependency tree.
-arboard = { version = "3", optional = true, default-features = false }
+# Clipboard (copy/paste): copypasta is the X11 selection stack used by
+# mainstream Rust terminals — it owns BOTH the CLIPBOARD and the PRIMARY
+# selection (select-to-copy + middle-click paste). Each context serves
+# selection requests from its own background thread for as long as the
+# process lives. Pure Rust (x11rb), no system dev libraries at build
+copypasta = { version = "0.10", optional = true, default-features = false, features = ["x11"] }
 
 [lib]
 name = "tuxixi"

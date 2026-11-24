@@ -24,6 +24,8 @@ pub mod update;
 pub mod vt;
 
 #[cfg(feature = "gui")]
+pub mod clip;
+#[cfg(feature = "gui")]
 pub mod font;
 #[cfg(feature = "gui")]
 pub mod glass;

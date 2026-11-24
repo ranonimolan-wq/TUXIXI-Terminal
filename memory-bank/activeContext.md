@@ -22,3 +22,10 @@ change, commit format `feat(scope): ...`.
   response verbatim.
 - `cli.rs` (759) and `theme_formats.rs` (680) are closest to the 800-line cap.
 - Copy verification on Wayland still indirect (arboard), watch reports.
+
+
+## 2026-11-24 session
+
+- Clipboard reworked: arboard -> copypasta; drag-selection now lands in PRIMARY+CLIPBOARD, middle-click pastes PRIMARY, OSC52 routed. Verified on Xvfb (xclip reads both selections).
+- RAM question closed with measurements: real Alacritty 125.0 MB vs TUXIXI 114-120 MB under identical Xvfb/software-GL; the user's 1.7 MB reading was a measurement artifact.
+- zsh typing verified clean on Xvfb (no ghost bytes) with the alacritty_terminal core.

@@ -117,7 +117,7 @@ mod tests {
         // With no reachable X server every context creation fails and
         // the struct must still be constructible: the session keeps
         // running, copy/paste just degrades.
-        let boards = Pasteboards::open();
+        let mut boards = Pasteboards::open();
         if std::env::var_os("DISPLAY").is_none() {
             assert!(!boards.any_available());
             assert!(!boards.store(Which::Clipboard, "x"));
